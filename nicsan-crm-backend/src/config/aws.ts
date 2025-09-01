@@ -18,33 +18,6 @@ export const s3 = new AWS.S3({
   }
 });
 
-// Textract Configuration
-export const textract = new AWS.Textract({
-  region: process.env.TEXTRACT_REGION || process.env.AWS_REGION || 'ap-south-1',
-  apiVersion: '2018-06-27'
-});
-
-// Textract service test function
-export const testTextractService = async () => {
-  try {
-    // Test Textract by checking if service is accessible (without actual processing)
-    // Use a simple method that exists on the Textract client
-    await textract.getDocumentAnalysis({ JobId: 'test-job-id' }).promise();
-    return { success: true, message: 'Textract service is accessible' };
-  } catch (error: any) {
-    if (error.code === 'AccessDeniedException') {
-      return { success: false, message: 'Textract service access denied - enable in AWS Console' };
-    } else if (error.code === 'UnrecognizedClientException') {
-      return { success: false, message: 'Textract service not available in this region' };
-    } else if (error.code === 'InvalidJobIdException') {
-      // This is expected for a test job ID, but means Textract service is accessible
-      return { success: true, message: 'Textract service is accessible (test job ID invalid as expected)' };
-    } else {
-      return { success: false, message: `Textract service issue: ${error.message}` };
-    }
-  }
-};
-
 // S3 bucket configuration
 export const s3Config = {
   bucketName: process.env.S3_BUCKET_NAME || 'nicsan-crm-pdfs',
@@ -76,7 +49,6 @@ export const validateFile = (file: Express.Multer.File): { valid: boolean; error
 
 export default {
   s3,
-  textract,
   s3Config,
   validateFile
 };

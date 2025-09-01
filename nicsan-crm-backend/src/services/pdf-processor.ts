@@ -1,5 +1,5 @@
 import AWS from 'aws-sdk';
-import { s3, textract, s3Config } from '../config/aws';
+import { s3, s3Config } from '../config/aws';
 import pool from '../config/database';
 import { PDFUpload, Policy } from '../types';
 
@@ -38,97 +38,19 @@ export class PDFProcessor {
   }
 
   /**
-   * Process PDF with AWS Textract
-   */
-  async processPDFWithTextract(s3Key: string, uploadId: string): Promise<any> {
-    try {
-      // Start asynchronous document analysis
-      const textractParams = {
-        DocumentLocation: {
-          S3Object: {
-            Bucket: s3Config.bucketName,
-            Name: s3Key
-          }
-        },
-        FeatureTypes: ['FORMS', 'TABLES'],
-        OutputConfig: {
-          S3Bucket: s3Config.bucketName,
-          S3Prefix: `textract-output/${uploadId}/`
-        }
-      };
-
-      const result = await textract.startDocumentAnalysis(textractParams).promise();
-      
-      // Update database with job ID
-      await pool.query(
-        'UPDATE pdf_uploads SET status = $1, extracted_data = $2 WHERE id = $3',
-        ['PROCESSING', { jobId: result.JobId }, uploadId]
-      );
-
-      return {
-        jobId: result.JobId,
-        status: 'PROCESSING'
-      };
-
-    } catch (error) {
-      console.error('Textract processing failed:', error);
-      
-      // Update database with error
-      await pool.query(
-        'UPDATE pdf_uploads SET status = $1, error_message = $2 WHERE id = $3',
-        ['FAILED', (error as Error).message, uploadId]
-      );
-
-      throw error;
-    }
-  }
-
-  /**
-   * Check Textract job status and get results
-   */
-  async getTextractResults(jobId: string): Promise<any> {
-    try {
-      const result = await textract.getDocumentAnalysis({ JobId: jobId }).promise();
-      
-      if (result.JobStatus === 'SUCCEEDED') {
-        return {
-          status: 'COMPLETED',
-          blocks: result.Blocks,
-          documentMetadata: result.DocumentMetadata
-        };
-      } else if (result.JobStatus === 'IN_PROGRESS') {
-        return {
-          status: 'PROCESSING',
-          progressPercent: (result as any).ProgressPercent || 0
-        };
-      } else if (result.JobStatus === 'FAILED') {
-        return {
-          status: 'FAILED',
-          statusMessage: result.StatusMessage
-        };
-      }
-
-      return { status: result.JobStatus };
-    } catch (error) {
-      console.error('Failed to get Textract results:', error);
-      throw error;
-    }
-  }
-
-  /**
-   * Extract policy data from Textract blocks
+   * Extract policy data from parsed text (placeholder for new extraction method)
    */
   extractPolicyData(blocks: any[]): Partial<Policy> {
     const extractedData: Partial<Policy> = {};
     
     if (!blocks) return extractedData;
 
-    // Extract text from blocks
-    const textBlocks = blocks.filter(block => block.BlockType === 'LINE');
-    const text = textBlocks.map(block => block.Text).join(' ');
+    // Extract text from blocks (generic parsing placeholder)
+    const textBlocks = Array.isArray(blocks) ? blocks.filter((block: any) => block.BlockType === 'LINE') : [];
+    const text = textBlocks.map((block: any) => block.Text).join(' ');
 
     // Extract key-value pairs
-    const keyValueBlocks = blocks.filter(block => block.BlockType === 'KEY_VALUE_SET');
+    const keyValueBlocks = Array.isArray(blocks) ? blocks.filter((block: any) => block.BlockType === 'KEY_VALUE_SET') : [];
     
     keyValueBlocks.forEach(block => {
       if (block.EntityType === 'KEY') {
@@ -423,79 +345,10 @@ export class PDFProcessor {
     }
   }
 
-  /**
-   * Get the status of a Textract job
-   */
-  async getTextractJobStatus(jobId: string): Promise<{
-    status: string;
-    progress?: number;
-    extracted_data?: any;
-    confidence_score?: number;
-    error_message?: string;
-  }> {
-    try {
-      console.log(`🔍 Checking Textract job status: ${jobId}`);
-      
-      const result = await textract.getDocumentAnalysis({ JobId: jobId }).promise();
-      
-      if (result.JobStatus === 'IN_PROGRESS') {
-        // Calculate progress based on completion percentage
-        const progress = (result as any).ProgressPercent || 0;
-        console.log(`📊 Textract job progress: ${progress}%`);
-        
-        return {
-          status: 'IN_PROGRESS',
-          progress
-        };
-      }
-      
-      if (result.JobStatus === 'SUCCEEDED') {
-        console.log(`✅ Textract job completed successfully`);
-        
-        // Parse the extracted data
-        const extractedData = this.extractPolicyData(result.Blocks || []);
-        const confidenceScore = this.calculateConfidenceScore(result.Blocks || []);
-        
-        return {
-          status: 'SUCCEEDED',
-          progress: 100,
-          extracted_data: extractedData,
-          confidence_score: confidenceScore
-        };
-      }
-      
-      if (result.JobStatus === 'FAILED') {
-        console.log(`❌ Textract job failed`);
-        
-        return {
-          status: 'FAILED',
-          error_message: result.StatusMessage || 'Unknown error occurred'
-        };
-      }
-      
-      return {
-        status: result.JobStatus || 'UNKNOWN'
-      };
-      
-    } catch (error: any) {
-      console.error('❌ Error checking Textract job status:', error);
-      
-      if (error.code === 'InvalidJobIdException') {
-        return {
-          status: 'FAILED',
-          error_message: 'Invalid job ID - job may have expired or been deleted'
-        };
-      }
-      
-      return {
-        status: 'ERROR',
-        error_message: error.message || 'Unknown error occurred'
-      };
-    }
-  }
+  // Background job status handling for external extraction can be added here
 
   /**
-   * Calculate confidence score from Textract blocks
+   * Calculate confidence score from parsed text
    */
   private calculateConfidenceScore(blocks: any[]): number {
     if (!blocks || blocks.length === 0) return 0;

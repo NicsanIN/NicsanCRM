@@ -14,8 +14,8 @@ import settingsRoutes from './routes/settings';
 dotenv.config();
 
 const app = express();
-// Use 5173 by default to match container/ALB config
-const PORT = Number(process.env.PORT) || 5173;
+// Use 3001 by default for local backend
+const PORT = Number(process.env.PORT) || 3001;
 
 // Middleware
 app.use(helmet());

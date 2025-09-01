@@ -265,7 +265,7 @@ function PageUpload() {
       const result = await uploadAPI.uploadPDF(formData);
       
       if (result.success) {
-        setUploadStatus('Upload successful! Processing with Textract...');
+        setUploadStatus('Upload successful! Ready for review.');
         const newFile = {
           id: result.data?.uploadId || Date.now(),
           filename: file.name,
@@ -280,7 +280,7 @@ function PageUpload() {
             status: 'UPLOADED',
             manual_extras: { ...manualExtras },
             extracted_data: {
-              // Mock PDF data for demo (in real app, this comes from Textract)
+              // Mock PDF data for demo (in real app, this comes from your extractor)
               policy_number: "TA-" + Math.floor(Math.random() * 10000),
               vehicle_number: "KA01AB" + Math.floor(Math.random() * 1000),
               insurer: selectedInsurer === 'TATA_AIG' ? 'Tata AIG' : 'Digit',
@@ -423,7 +423,7 @@ function PageUpload() {
 
   return (
     <>
-      <Card title="Drag & Drop PDF" desc="(S3 = cloud folder; Textract = PDF reader bot). Tata AIG & Digit only in v1.">
+      <Card title="Drag & Drop PDF" desc="(S3 = cloud folder). Tata AIG & Digit only in v1.">
         {/* Insurer Selection */}
         <div className="mb-4">
           <div className="text-sm font-medium mb-2">Select Insurer</div>
@@ -627,7 +627,7 @@ function PageUpload() {
                 browse files
               </button>
             </div>
-            <div className="text-sm text-zinc-500">PDF will be processed with Textract + your manual extras</div>
+            <div className="text-sm text-zinc-500">PDF will be queued with your manual extras</div>
             {manualExtrasSaved && (
               <div className="text-sm text-green-600 font-medium">
                 ✅ Manual extras ready! Drop PDF to continue
@@ -1346,7 +1346,7 @@ function PageReview() {
       <Card title="Review & Confirm" desc="Select an upload to review">
         <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
           <div className="text-sm text-blue-800">
-            💡 <strong>Workflow:</strong> PDF Upload → Manual Extras → Textract Processing → Review & Confirm → Save to Database
+            💡 <strong>Workflow:</strong> PDF Upload → Manual Extras → Review & Confirm → Save to Database
           </div>
         </div>
         

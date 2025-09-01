@@ -1,3 +1,4 @@
+
 import { Pool, PoolConfig } from 'pg';
 import dotenv from 'dotenv';
 
@@ -25,7 +26,7 @@ pool.on('connect', () => {
 
 pool.on('error', (err) => {
   console.error('❌ Database connection error:', err);
-  process.exit(-1);
+  // Do not exit; allow the server to run for non-DB routes and retry later
 });
 
 // Graceful shutdown

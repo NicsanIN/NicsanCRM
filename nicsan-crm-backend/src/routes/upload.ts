@@ -2,7 +2,8 @@ import { Router } from 'express';
 import multer from 'multer';
 import pool from '../config/database';
 import { authenticateToken, requireAnyRole, AuthenticatedRequest } from '../middleware/auth';
-import { s3, textract, s3Config, validateFile } from '../config/aws';
+import { s3, s3Config, validateFile } from '../config/aws';
+import { putPdf, S3_BUCKET } from '../lib/s3';
 import { createError } from '../middleware/errorHandler';
 import { PDFUpload, ApiResponse } from '../types';
 import PDFProcessor from '../services/pdf-processor';
@@ -57,10 +58,10 @@ router.post('/presigned-url', async (req: AuthenticatedRequest, res, next) => {
   }
 });
 
-// Upload PDF and process with Textract
+// Upload PDF
 router.post('/pdf', upload.single('pdf'), async (req: AuthenticatedRequest, res, next) => {
   try {
-    const userId = req.user?.id;
+    const userId = req.user?.userId;
     if (!userId) {
       return next(createError('User not authenticated', 401));
     }
@@ -95,31 +96,17 @@ router.post('/pdf', upload.single('pdf'), async (req: AuthenticatedRequest, res,
     }
 
     const timestamp = Date.now();
-    const s3Key = `uploads/${userId}/${timestamp}_${file.originalname}`;
+    const safeName = file.originalname.replace(/[^\w.\-]+/g, '_');
+    const s3Key = `uploads/${userId}/${timestamp}_${safeName}`;
 
     // Upload to S3
-    const s3Params = {
-      Bucket: process.env.AWS_S3_BUCKET!,
-      Key: s3Key,
-      Body: file.buffer,
-      ContentType: file.mimetype,
-      Metadata: {
-        originalName: file.originalname,
-        uploadedBy: userId!,
-        insurer: insurer,
-        timestamp: timestamp.toString(),
-        // Store manual extras in S3 metadata for Lambda access
-        ...Object.entries(manualExtras).reduce((acc, [key, value]) => {
-          if (value) acc[`manual_${key}`] = value.toString();
-          return acc;
-        }, {} as Record<string, string>)
-      }
-    };
-
     try {
-      await s3.upload(s3Params).promise();
-    } catch (s3Error) {
-      console.error('S3 upload failed:', s3Error);
+      await putPdf(s3Key, file.buffer);
+    } catch (e: any) {
+      const code = e?.$metadata?.httpStatusCode;
+      const name = e?.name || 'Error';
+      const msg = e?.message || String(e);
+      console.error('S3 put failed:', { code, name, msg, bucket: S3_BUCKET, key: s3Key });
       return next(createError('Failed to upload file to S3', 500));
     }
 
@@ -132,7 +119,7 @@ router.post('/pdf', upload.single('pdf'), async (req: AuthenticatedRequest, res,
         file.originalname,
         file.originalname,
         s3Key,
-        `https://${process.env.AWS_S3_BUCKET}.s3.amazonaws.com/${s3Key}`,
+        `https://${S3_BUCKET}.s3.amazonaws.com/${s3Key}`,
         file.size,
         file.mimetype,
         'UPLOADED',
@@ -148,53 +135,21 @@ router.post('/pdf', upload.single('pdf'), async (req: AuthenticatedRequest, res,
 
     const pdfUpload = uploadResult.rows[0];
 
-    // Start Textract processing
-    try {
-      const textractParams = {
-        Document: {
-          S3Object: {
-            Bucket: process.env.AWS_S3_BUCKET!,
-            Name: s3Key
-          }
-        },
-        FeatureTypes: ['FORMS', 'TABLES'],
-        ClientRequestToken: `${userId}_${timestamp}`,
-        JobTag: `upload_${pdfUpload.id}`
-      };
+    // For now, keep status as UPLOADED to satisfy DB constraint
+    await pool.query(
+      `UPDATE pdf_uploads SET status = $1 WHERE id = $2`,
+      ['UPLOADED', pdfUpload.id]
+    );
 
-      const textractResult = await textract.startDocumentAnalysis(textractParams).promise();
-      
-      // Update database with job ID
-      await pool.query(
-        `UPDATE pdf_uploads SET 
-          extracted_data = jsonb_set(extracted_data, '{textract_job_id}', $1),
-          status = $2
-        WHERE id = $3`,
-        [JSON.stringify(textractResult.JobId), 'PROCESSING', pdfUpload.id]
-      );
-
-      res.json({
-        success: true,
-        message: 'PDF uploaded and processing started',
-        data: {
-          uploadId: pdfUpload.id,
-          s3Key: s3Key,
-          textractJobId: textractResult.JobId,
-          status: 'PROCESSING'
-        }
-      });
-
-    } catch (textractError) {
-      console.error('Textract start failed:', textractError);
-      
-      // Update status to failed
-      await pool.query(
-        `UPDATE pdf_uploads SET status = $1 WHERE id = $2`,
-        ['FAILED', pdfUpload.id]
-      );
-
-      return next(createError('Failed to start PDF processing', 500));
-    }
+    res.json({
+      success: true,
+      message: 'PDF uploaded successfully. Processing is disabled.',
+      data: {
+        uploadId: pdfUpload.id,
+        s3Key: s3Key,
+        status: 'REVIEW'
+      }
+    } as ApiResponse<any>);
 
   } catch (error) {
     console.error('PDF upload error:', error);
@@ -437,7 +392,7 @@ router.get('/internal/by-s3key/:s3Key', async (req, res, next) => {
   }
 });
 
-// Check Textract processing status
+// Check upload status
 router.get('/status/:uploadId', async (req: AuthenticatedRequest, res, next) => {
   try {
     const { uploadId } = req.params;
@@ -486,36 +441,7 @@ router.get('/pdf/:id', async (req: AuthenticatedRequest, res, next) => {
 
     const upload = result.rows[0];
     
-    // If status is PROCESSING, check Textract job status
-    if (upload.status === 'PROCESSING' && upload.job_id) {
-      try {
-        const jobStatus = await PDFProcessor.getTextractJobStatus(upload.job_id);
-        
-        // Update status if job is complete
-        if (jobStatus.status === 'SUCCEEDED') {
-          await pool.query(
-            'UPDATE pdf_uploads SET status = $1, extracted_data = $2, confidence_score = $3 WHERE id = $4',
-            ['COMPLETED', JSON.stringify(jobStatus.extracted_data), jobStatus.confidence_score, id]
-          );
-          upload.status = 'COMPLETED';
-          upload.extracted_data = jobStatus.extracted_data;
-          upload.confidence_score = jobStatus.confidence_score;
-        } else if (jobStatus.status === 'FAILED') {
-          await pool.query(
-            'UPDATE pdf_uploads SET status = $1, error_message = $2 WHERE id = $4',
-            ['FAILED', jobStatus.error_message || 'Textract processing failed', id]
-          );
-          upload.status = 'FAILED';
-          upload.error_message = jobStatus.error_message;
-        } else if (jobStatus.status === 'IN_PROGRESS') {
-          // Job is still processing, add progress info
-          upload.progress = jobStatus.progress || 0;
-        }
-      } catch (textractError) {
-        console.error('Textract status check failed:', textractError);
-        // Don't fail the request, just return current status
-      }
-    }
+    // No background processing; simply return current status
 
     res.json({
       success: true,
@@ -528,38 +454,7 @@ router.get('/pdf/:id', async (req: AuthenticatedRequest, res, next) => {
   }
 });
 
-// Get detailed Textract job status
-router.get('/pdf/:id/textract-status', async (req: AuthenticatedRequest, res, next) => {
-  try {
-    const { id } = req.params;
-    
-    const result = await pool.query(
-      'SELECT job_id FROM pdf_uploads WHERE id = $1',
-      [id]
-    );
-
-    if (result.rows.length === 0) {
-      return next(createError('Upload not found', 404));
-    }
-
-    const { job_id } = result.rows[0];
-    
-    if (!job_id) {
-      return next(createError('No Textract job ID found', 400));
-    }
-
-    const jobStatus = await PDFProcessor.getTextractJobStatus(job_id);
-
-    res.json({
-      success: true,
-      message: 'Textract job status retrieved successfully',
-      data: jobStatus
-    } as ApiResponse<any>);
-
-  } catch (error) {
-    next(error);
-  }
-});
+// Detailed job status endpoint removed
 
 // Get all uploads for user
 router.get('/', async (req: AuthenticatedRequest, res, next) => {

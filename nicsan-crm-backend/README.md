@@ -6,7 +6,7 @@ A robust, enterprise-grade backend API for the Nicsan CRM insurance operations m
 
 - **Authentication & Authorization**: JWT-based auth with role-based access control
 - **Policy Management**: Complete CRUD operations for insurance policies
-- **PDF Processing**: AWS Textract integration for automated data extraction
+- **PDF Processing**: PDF upload and review flow (external extraction TBD)
 - **File Upload**: S3 integration for secure file storage
 - **Analytics Dashboard**: Comprehensive KPI and performance metrics
 - **User Management**: Role-based user administration
@@ -17,7 +17,7 @@ A robust, enterprise-grade backend API for the Nicsan CRM insurance operations m
 - **Framework**: Node.js + Express.js
 - **Language**: TypeScript
 - **Database**: PostgreSQL (AWS RDS)
-- **Cloud Services**: AWS S3, AWS Textract
+- **Cloud Services**: AWS S3
 - **Authentication**: JWT with bcrypt password hashing
 - **File Handling**: Multer for multipart/form-data
 
@@ -25,7 +25,7 @@ A robust, enterprise-grade backend API for the Nicsan CRM insurance operations m
 
 - Node.js 18+ LTS
 - PostgreSQL database (AWS RDS recommended)
-- AWS Account with S3 and Textract access
+- AWS Account with S3 access
 - AWS CLI configured (optional, for local development)
 
 ## 🛠️ Installation
@@ -126,7 +126,7 @@ CORS_ORIGIN=http://localhost:5173
 - `POST /api/policies/bulk` - Bulk create policies (grid entry)
 
 ### File Upload
-- `POST /api/upload/pdf` - Upload PDF for Textract processing
+- `POST /api/upload/pdf` - Upload PDF (processing handled externally)
 - `GET /api/upload/pdf/:id` - Get upload status
 - `GET /api/upload/pdf` - List all uploads
 - `POST /api/upload/pdf/:id/retry` - Retry failed processing
@@ -162,10 +162,8 @@ CORS_ORIGIN=http://localhost:5173
 2. **Validation**: File size, type, and metadata validation
 3. **S3 Storage**: File stored in configured S3 bucket
 4. **Database Record**: Upload record created with status 'UPLOADED'
-5. **Textract Processing**: Asynchronous processing with AWS Textract
-6. **Data Extraction**: Key-value pairs and table data extracted
-7. **Confidence Scoring**: AI confidence calculated for extracted data
-8. **Status Update**: Database updated with results or errors
+5. **Processing**: External extraction pipeline (to be integrated)
+6. **Review**: Ops review and confirmation
 
 ## 🚀 Performance Features
 
@@ -198,7 +196,7 @@ npm run dev:build    # Build and run
 - **Error Logging** with stack traces
 - **Database Connection** monitoring
 - **File Upload** progress tracking
-- **Textract Processing** status updates
+PDF processing status updates
 
 ## 🔄 Deployment
 
@@ -207,7 +205,7 @@ npm run dev:build    # Build and run
 - [ ] Database schema deployed
 - [ ] AWS credentials configured
 - [ ] S3 bucket created and configured
-- [ ] Textract permissions set
+- [ ] External processing pipeline configured
 - [ ] SSL certificates configured
 - [ ] Process manager (PM2) configured
 - [ ] Monitoring and alerting set up

@@ -61,8 +61,7 @@ export interface PDFUpload {
   s3_key: string;
   file_size: number;
   mime_type: string;
-  upload_status: 'pending' | 'completed' | 'failed';
-  textract_status: 'pending' | 'processing' | 'completed' | 'failed';
+  upload_status: 'pending' | 'completed' | 'failed' | 'review';
   extracted_data?: any;
   confidence_score?: number;
   created_at: string;
