@@ -385,42 +385,10 @@ export class PDFProcessor {
       // Update upload status
       await pool.query(
         'UPDATE pdf_uploads SET status = $1, extracted_data = $2 WHERE id = $3',
-        ['COMPLETED', policyData, uploadId]
+        ['REVIEW', policyData, uploadId]
       );
 
-      // Create policy record if confidence is high enough
-      if (policyData.confidence_score && policyData.confidence_score > 0.7) {
-        await pool.query(
-          `INSERT INTO policies (
-            policy_number, vehicle_number, insurer, product_type, vehicle_type,
-            make, model, issue_date, expiry_date, idv, ncb, net_od,
-            total_od, net_premium, total_premium, cashback_amount,
-            customer_paid, executive, caller_name, mobile, source,
-            confidence_score, created_by
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)`,
-          [
-            policyData.policy_number || 'AUTO-' + Date.now(),
-            policyData.vehicle_number || 'UNKNOWN',
-            policyData.insurer || 'UNKNOWN',
-            'AUTO', 'CAR',
-            'UNKNOWN', 'UNKNOWN',
-            policyData.issue_date || new Date(),
-            policyData.expiry_date || new Date(Date.now() + 365 * 24 * 60 * 60 * 1000),
-            policyData.idv || 0,
-            policyData.ncb || 0,
-            policyData.net_od || 0,
-            policyData.total_od || 0,
-            policyData.net_premium || 0,
-            policyData.total_premium || 0,
-            policyData.cashback_amount || 0,
-            policyData.customer_paid || 0,
-            'SYSTEM', 'PDF_EXTRACT', '0000000000',
-            'PDF_UPLOAD',
-            policyData.confidence_score,
-            'system'
-          ]
-        );
-      }
+      // Creating a policy record is deferred until ops confirms (SAVED)
 
     } catch (error) {
       console.error('Failed to complete processing:', error);

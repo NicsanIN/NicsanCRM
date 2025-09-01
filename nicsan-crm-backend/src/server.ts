@@ -1,3 +1,4 @@
+import "dotenv/config"; // must be first import
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
@@ -9,6 +10,7 @@ import userRoutes from './routes/users';
 import uploadRoutes from './routes/upload';
 import dashboardRoutes from './routes/dashboard';
 import settingsRoutes from './routes/settings';
+
 
 // Load environment variables
 dotenv.config();

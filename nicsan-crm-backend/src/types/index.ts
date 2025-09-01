@@ -107,7 +107,7 @@ export interface PDFUpload {
   s3_url: string;
   file_size: number;
   mime_type: string;
-  status: 'UPLOADED' | 'PROCESSING' | 'COMPLETED' | 'FAILED';
+  status: 'UPLOADED' | 'PROCESSING' | 'REVIEW' | 'FAILED';
   confidence_score?: number;
   extracted_data?: any;
   error_message?: string;
