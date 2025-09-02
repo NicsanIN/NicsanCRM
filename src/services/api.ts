@@ -305,6 +305,13 @@ export const uploadAPI = {
       method: 'POST',
     });
   },
+
+  confirmAndSave: async (uploadId: string, edits: any): Promise<ApiResponse<any>> => {
+    return apiCall(`/uploads/${uploadId}/confirm-save`, {
+      method: 'POST',
+      body: JSON.stringify({ edits }),
+    });
+  },
 };
 
 // Dashboard API

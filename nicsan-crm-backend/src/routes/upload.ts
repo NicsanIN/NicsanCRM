@@ -7,6 +7,7 @@ import { putPdf, S3_BUCKET } from '../lib/s3';
 import { createError } from '../middleware/errorHandler';
 import { PDFUpload, ApiResponse } from '../types';
 import PDFProcessor from '../services/pdf-processor';
+import { processUpload } from '../workers/pdfProcessor';
 
 const router = Router();
 
@@ -141,13 +142,26 @@ router.post('/pdf', upload.single('pdf'), async (req: AuthenticatedRequest, res,
       ['UPLOADED', pdfUpload.id]
     );
 
+    // Fire-and-forget background processor; do not await
+    setImmediate(() => {
+      processUpload(String(pdfUpload.id)).catch((e: any) => {
+        console.error('PROCESS_UPLOAD_ASYNC_ERROR', {
+          uploadId: String(pdfUpload.id),
+          name: e?.name,
+          msg: e?.message,
+        });
+        // Optional: mark as FAILED if desired
+        // pool.query(`UPDATE pdf_uploads SET status = 'FAILED' WHERE id = $1`, [pdfUpload.id]).catch(() => {});
+      });
+    });
+
     res.json({
       success: true,
-      message: 'PDF uploaded successfully. Processing is disabled.',
+      message: 'PDF uploaded successfully. Processing started.',
       data: {
         uploadId: pdfUpload.id,
         s3Key: s3Key,
-        status: 'REVIEW'
+        status: 'UPLOADED'
       }
     } as ApiResponse<any>);
 

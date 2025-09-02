@@ -2,7 +2,7 @@ import pool from "../config/database";
 import { extractFromPdf } from "../extraction";
 import { parsePolicyExtractV1 } from "../extraction/schema";
 
-const Allowed = new Set(["UPLOADED","PROCESSING","REVIEW","SAVED","COMPLETED"]);
+const Allowed = new Set(["UPLOADED","PROCESSING","REVIEW","SAVED","COMPLETED","FAILED"]);
 async function setStatus(id: string | number, status: string) {
   const s = String(status).trim().toUpperCase();
   if (!Allowed.has(s)) {
@@ -13,24 +13,6 @@ async function setStatus(id: string | number, status: string) {
     `UPDATE pdf_uploads SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
     [s, id]
   );
-}
-
-let cachedFinalStatus: "REVIEW" | "COMPLETED" | null = null;
-async function determineFinalStatus(): Promise<"REVIEW" | "COMPLETED"> {
-  if (cachedFinalStatus) return cachedFinalStatus;
-  try {
-    const q = await pool.query(
-      `SELECT pg_get_constraintdef(c.oid) AS def
-       FROM pg_constraint c
-       JOIN pg_class t ON t.oid = c.conrelid
-       WHERE t.relname = 'pdf_uploads' AND c.conname ILIKE '%status%'`
-    );
-    const def: string = (q.rows[0]?.def || "").toUpperCase();
-    cachedFinalStatus = def.includes("'REVIEW'") ? "REVIEW" : "COMPLETED";
-  } catch (_e) {
-    cachedFinalStatus = "COMPLETED";
-  }
-  return cachedFinalStatus;
 }
 
 export async function processUpload(uploadId: string): Promise<void> {
@@ -74,8 +56,16 @@ export async function processUpload(uploadId: string): Promise<void> {
       [JSON.stringify(merged), uploadId]
     );
 
-    const finalStatus = await determineFinalStatus();
-    await setStatus(uploadId, finalStatus);
+    try {
+      await setStatus(uploadId, "REVIEW");
+    } catch (err: any) {
+      const msg = String(err?.message || "");
+      if (msg.includes("pdf_uploads_status_check") || msg.includes("23514")) {
+        await setStatus(uploadId, "COMPLETED");
+      } else {
+        throw err;
+      }
+    }
 
   } catch (e: any) {
     console.error("PROCESSOR_ERROR", { uploadId, name: e?.name, msg: e?.message });

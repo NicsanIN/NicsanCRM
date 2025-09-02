@@ -10,6 +10,7 @@ import userRoutes from './routes/users';
 import uploadRoutes from './routes/upload';
 import dashboardRoutes from './routes/dashboard';
 import settingsRoutes from './routes/settings';
+import reviewRoutes from './routes/review';
 
 
 // Load environment variables
@@ -63,6 +64,7 @@ app.use('/api/users', userRoutes);
 app.use('/api/upload', uploadRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/settings', settingsRoutes);
+app.use('/api', reviewRoutes);
 
 // Error handling middleware
 app.use(notFoundHandler);

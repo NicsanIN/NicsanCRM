@@ -2,6 +2,17 @@ import "dotenv/config";
 import { Client } from "pg";
 
 function pgConfig() {
+  // Prefer backend server envs (DB_*) first to match running server
+  if (process.env.DB_HOST && process.env.DB_USER) {
+    return {
+      host: process.env.DB_HOST,
+      port: Number(process.env.DB_PORT || 5432),
+      user: process.env.DB_USER,
+      password: String(process.env.DB_PASSWORD || ""),
+      database: process.env.DB_NAME || "postgres",
+    };
+  }
+  // Then explicit PG* vars
   if (process.env.PGHOST && process.env.PGUSER && process.env.PGPASSWORD) {
     return {
       host: process.env.PGHOST,
@@ -11,6 +22,7 @@ function pgConfig() {
       database: process.env.PGDATABASE || "postgres",
     };
   }
+  // Finally DATABASE_URL
   if (process.env.DATABASE_URL) return { connectionString: String(process.env.DATABASE_URL) };
   throw new Error("No PG envs set");
 }

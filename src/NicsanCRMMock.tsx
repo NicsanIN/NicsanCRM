@@ -1222,27 +1222,26 @@ function PageReview() {
   const handleConfirmAndSave = async () => {
     setIsLoading(true);
     setSaveMessage(null);
-    
     try {
-      // In real app, this would save the confirmed data to the database
-      await new Promise(resolve => setTimeout(resolve, 1000)); // Simulate API call
-      
-      setSubmitMessage({ 
-        type: 'success', 
-        message: 'Policy confirmed and saved successfully!' 
-      });
-      
-      // Clear form after successful save
-      setTimeout(() => {
-        setReviewData(null);
-        setSaveMessage(null);
-      }, 2000);
-      
+      const uploadId = reviewData?.id || selectedUpload;
+      if (!uploadId) {
+        setSubmitMessage({ type: 'error', message: 'No upload selected' });
+        return;
+      }
+      const resp = await uploadAPI.confirmAndSave(String(uploadId), {});
+      if (resp.success) {
+        setSubmitMessage({ type: 'success', message: 'Policy confirmed and saved successfully!' });
+        // Remove from available list and clear review view
+        setAvailableUploads(prev => prev.filter(u => u.id !== uploadId));
+        setTimeout(() => {
+          setReviewData(null);
+          setSaveMessage(null);
+        }, 800);
+      } else {
+        setSubmitMessage({ type: 'error', message: resp.error || 'Save failed' });
+      }
     } catch (error) {
-      setSubmitMessage({ 
-        type: 'error', 
-        message: 'Failed to save policy. Please try again.' 
-      });
+      setSubmitMessage({ type: 'error', message: error instanceof Error ? error.message : 'Unknown error' });
     } finally {
       setIsLoading(false);
     }
