@@ -25,6 +25,7 @@ const DateISO = z.string().regex(/^\d{4}-\d{2}-\d{2}$/); // YYYY-MM-DD
 export const PolicyExtractV1 = z.object({
   schema_version: z.literal("1.0"),
   insurer: Field(Insurer),
+  // product_type is sent separately (plain string) in confirm payload; ignore here
 
   // Core identifiers
   policy_number: Field(z.string()),

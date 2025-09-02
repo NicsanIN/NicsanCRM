@@ -144,8 +144,8 @@ export const buildConfirmPayload = (form: any) => ({
   expiry_date:    wrapField(form?.expiry_date),
   total_premium:  wrapField(form?.total_premium),
   idv:            wrapField(form?.idv),
-  product_type:   wrapField(form?.product_type),
-  vehicle_type:   wrapField(form?.vehicle_type),
+  product_type:   (form?.product_type ?? 'MOTOR'),
+  vehicle_type:   (form?.vehicle_type ?? 'PRIVATE'),
   make:           wrapField(form?.make),
   model:          wrapField(form?.model),
   manual_extras:  form?.manual_extras ?? {},
@@ -222,6 +222,12 @@ export const policiesAPI = {
       method: 'POST',
       body: JSON.stringify({ policies }),
     });
+  },
+
+  getRecent: async (limit = 6): Promise<ApiResponse<any[]>> => {
+    const r = await fetch(`${API_BASE_URL}/policies/recent?limit=${limit}`, { credentials: 'include' });
+    if (!r.ok) throw new Error('RECENT_FETCH_FAILED');
+    return r.json(); // { ok, data }
   },
 };
 

@@ -1102,13 +1102,14 @@ function PageManualGrid() {
   )
 }
 
-function PageReview() {
+function PageReview({ user }: { user: {name:string; email?:string; role:"ops"|"founder"} }) {
   const [reviewData, setReviewData] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [saveMessage, setSaveMessage] = useState<{type: 'success' | 'error', message: string} | null>(null);
   const [submitMessage, setSubmitMessage] = useState<{type: 'success' | 'error', message: string} | null>(null);
   const [availableUploads, setAvailableUploads] = useState<any[]>([]);
   const [selectedUpload, setSelectedUpload] = useState<string>('');
+  const [recentPolicies, setRecentPolicies] = useState<any[]>([]);
 
     // Load available uploads for review
   useEffect(() => {
@@ -1200,6 +1201,18 @@ function PageReview() {
     return () => clearInterval(interval);
   }, []);
 
+  // Load recent policies
+  useEffect(() => {
+    (async () => {
+      try {
+        const resp = await policiesAPI.getRecent(6);      // get last six policies
+        if (resp.ok) setRecentPolicies(resp.data ?? []);
+      } catch (e) {
+        console.warn('recent policies fetch failed', e); // don't block page
+      }
+    })();
+  }, []);
+
   const loadUploadData = async (uploadId: string) => {
     try {
       // In real app, this would fetch the actual upload data from backend
@@ -1238,12 +1251,15 @@ function PageReview() {
         expiry_date: pdfData.expiry_date,
         total_premium: pdfData.total_premium,
         idv: pdfData.idv,
-        product_type: pdfData.product_type,
+        product_type: 'MOTOR',
         vehicle_type: pdfData.vehicle_type,
         make: pdfData.make,
         model: pdfData.model,
         variant: pdfData.variant,
         fuel_type: pdfData.fuel_type,
+        executive: user?.name ?? 'OPS',
+        caller_name: user?.name ?? 'NA',
+        mobile: '0000000000', // Default mobile since user object doesn't have mobile
         manual_extras: reviewData?.extracted_data?.manual_extras || {},
       };
 
@@ -1729,6 +1745,23 @@ function PageReview() {
             Reject to Manual
           </button>
         </div>
+
+        {/* Recent Policies Section */}
+        <section className="mt-6">
+          <h3 className="text-lg font-semibold">Recent Policies (last 6)</h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 mt-3">
+            {recentPolicies.map(p => (
+              <div key={p.id} className="rounded-xl border p-3">
+                <div className="text-sm opacity-70">{p.insurer} · {p.product_type}/{p.vehicle_type}</div>
+                <div className="font-semibold">{p.policy_number || 'NA'}</div>
+                <div className="text-sm">Veh: {p.vehicle_number || 'NA'}</div>
+                <div className="text-sm">Issue → Exp: {p.issue_date || '—'} → {p.expiry_date || '—'}</div>
+                <div className="text-sm">IDV: {p.idv ?? 0} · Premium: {p.total_premium ?? 0}</div>
+                <div className="text-xs opacity-60">By: {p.executive || 'OPS'} / {p.caller_name || 'NA'}</div>
+              </div>
+            ))}
+          </div>
+        </section>
       </Card>
     </>
   )
@@ -2124,7 +2157,7 @@ export default function NicsanCRMMock() {
       {tab === "ops" ? (
         <Shell sidebar={<OpsSidebar page={opsPage} setPage={setOpsPage} />}>
           {opsPage === "upload" && <PageUpload/>}
-          {opsPage === "review" && <PageReview/>}
+          {opsPage === "review" && <PageReview user={user}/>}
           {opsPage === "manual-form" && <PageManualForm/>}
           {opsPage === "manual-grid" && <PageManualGrid/>}
           {opsPage === "policy-detail" && <PagePolicyDetail/>}

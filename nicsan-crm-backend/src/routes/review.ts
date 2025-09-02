@@ -2,6 +2,7 @@ import { Router } from 'express';
 import pool from '../config/database';
 import { authenticateToken, requireAnyRole, AuthenticatedRequest } from '../middleware/auth';
 import { parsePolicyExtractV1 } from '../extraction/schema';
+import { ConfirmSaveSchema } from '../schemas/confirmSave';
 import { processUpload } from '../workers/pdfProcessor';
 
 const router = Router();
@@ -29,40 +30,112 @@ router.post('/uploads/:id/confirm-save', async (req: AuthenticatedRequest, res, 
       return res.status(409).json({ success: false, error: `Upload not in REVIEW/COMPLETED (found: ${upload.status})` });
     }
 
-    // 2) Merge extracted_data with any UI edits (flat fields only)
+    // 2) Prefer incoming Zod-shaped payload; otherwise fall back to DB extract + legacy edits
     const raw = upload.extracted_data;
-    if (!raw) {
-      return res.status(400).json({ success: false, error: 'No extracted_data to save' });
-    }
-
-    const parsed = parsePolicyExtractV1(raw); // validates shape from extractor
     // Accept either top-level Zod payload or legacy { edits }
     const incoming = (req.body && (req.body as any).schema_version === '1.0')
       ? (req.body as Record<string, any>)
       : ((req.body?.edits ?? {}) as Record<string, any>);
-    // If frontend sent full Zod-shaped payload, parse and read from it; else unwrap values if objects
-    const isZodShapedPayload = typeof incoming === 'object' && incoming != null && incoming.schema_version === '1.0';
-    const parsedIncoming = isZodShapedPayload ? parsePolicyExtractV1(incoming) : null;
+
+         // 1) helper: parse money-like inputs safely → number (default 0)
+     const toMoney = (field?: { value?: string | number } | string | number | null) => {
+       // reason: accept both wrapped {value} and raw
+       const raw = (field && typeof field === 'object' && 'value' in field) ? (field as any).value : field;
+       if (raw === undefined || raw === null || raw === '') return 0;           // reason: blank → 0
+       const cleaned = String(raw).replace(/[₹,\s]/g, '');                       // reason: strip currency & commas
+       const n = Number(cleaned);
+       return Number.isFinite(n) ? n : 0;                                        // reason: bad numbers → 0
+     };
+
+     // 1) helper: unwrap {value} or raw → trimmed string with fallback
+     const toText = (
+       f?: { value?: string } | string | null | undefined,
+       fallback = 'UNKNOWN'
+     ) => {
+       const raw = (f && typeof f === 'object' && 'value' in f) ? (f as any).value : f;
+       const s = (raw ?? '').toString().trim();
+       return s.length ? s : fallback;
+     };
+
+     // 2) use it only for the columns you have
+     const idv           = toMoney(req.body.idv);
+     const netOd         = toMoney(req.body.net_od);
+     const netPremium    = toMoney(req.body.net_premium);
+     const totalOd       = toMoney(req.body.total_od);
+     const totalPremium  = toMoney(req.body.total_premium);
+     const customerPaid  = toMoney(req.body.customer_paid);
+
+     // 2) compute safe values for NOT NULL text columns you have
+     const insurer       = toText(req.body.insurer,        'UNKNOWN');   // enum upstream; keep fallback safe
+     const policyNumber  = toText(req.body.policy_number,  'NA');
+     const vehicleNumber = toText(req.body.vehicle_number, 'NA');
+     const productType   = toText(req.body.product_type,   'MOTOR');
+     const vehicleType   = toText(req.body.vehicle_type,   'PRIVATE');
+     const source        = toText(req.body.source,         'PDF_UPLOAD');
+     const executive     = toText(req.body.executive,      'OPS');
+     const callerName    = toText(req.body.caller_name,    'NA');
+     const mobile        = toText(req.body.mobile,         '0000000000');
+     const make          = toText(req.body.make,           'UNKNOWN');
+
+     // TEMP sanity log
+     try {
+       console.log('ptype:', (req as any).body?.product_type, 'vtype:', (req as any).body?.vehicle_type);
+       console.log('make =>', (req as any).body?.make);
+       console.log('ncb =>', (req as any).body?.ncb);
+       console.log('money fields =>', { idv, netOd, netPremium, totalOd, totalPremium, customerPaid });
+       console.log('text fields =>', { insurer, policyNumber, vehicleNumber, productType, vehicleType, source, executive, callerName, mobile, make });
+     } catch {}
+
+    // Try parsing from DB, but tolerate failures (older rows)
+    let parsedFromDb: any = null;
+    try {
+      if (raw) parsedFromDb = parsePolicyExtractV1(raw);
+    } catch (_) {
+      parsedFromDb = null;
+    }
+
+    // If incoming is Zod-shaped, validate it now
+    const isZodIncoming = typeof incoming === 'object' && incoming != null && (incoming as any).schema_version === '1.0';
+    let parsedIncoming: any = null;
+    if (isZodIncoming) {
+      // Validate extraction fields
+      parsedIncoming = parsePolicyExtractV1(incoming);
+      // Validate product_type and vehicle_type separately as plain strings
+      ConfirmSaveSchema.pick({ schema_version: true, product_type: true, vehicle_type: true }).parse({
+        schema_version: (incoming as any).schema_version,
+        product_type: (incoming as any).product_type,
+        vehicle_type: (incoming as any).vehicle_type,
+      });
+    }
+
     const getIncoming = (key: string) => {
       const v = (incoming as any)[key];
       if (v && typeof v === 'object' && 'value' in v) return (v as any).value;
       return v ?? null;
     };
-    const getV = (k: keyof typeof parsed) => (parsed as any)[k]?.value ?? null;
+    const getDb = (k: string) => (parsedFromDb ? (parsedFromDb as any)[k]?.value ?? null : null);
 
     const merged: any = {
-      insurer: parsedIncoming ? (parsedIncoming as any).insurer?.value ?? null : getIncoming('insurer') ?? getV('insurer'),
-      policy_number: parsedIncoming ? (parsedIncoming as any).policy_number?.value ?? null : getIncoming('policy_number') ?? getV('policy_number'),
-      vehicle_number: parsedIncoming ? (parsedIncoming as any).vehicle_number?.value ?? null : getIncoming('vehicle_number') ?? getV('vehicle_number'),
-      issue_date: parsedIncoming ? (parsedIncoming as any).issue_date?.value ?? null : getIncoming('issue_date') ?? getV('issue_date'),
-      expiry_date: parsedIncoming ? (parsedIncoming as any).expiry_date?.value ?? null : getIncoming('expiry_date') ?? getV('expiry_date'),
-      total_premium: parsedIncoming ? (parsedIncoming as any).total_premium?.value ?? null : getIncoming('total_premium') ?? getV('total_premium'),
-      idv: parsedIncoming ? (parsedIncoming as any).idv?.value ?? null : getIncoming('idv') ?? getV('idv'),
-      make: parsedIncoming ? (parsedIncoming as any).make?.value ?? null : getIncoming('make') ?? (parsed as any).make?.value ?? null,
-      model: parsedIncoming ? (parsedIncoming as any).model?.value ?? null : getIncoming('model') ?? (parsed as any).model?.value ?? null,
-      variant: parsedIncoming ? (parsedIncoming as any).variant?.value ?? null : getIncoming('variant') ?? (parsed as any).variant?.value ?? null,
-      fuel_type: parsedIncoming ? (parsedIncoming as any).fuel_type?.value ?? null : getIncoming('fuel_type') ?? (parsed as any).fuel_type?.value ?? null,
+      insurer: parsedIncoming ? (parsedIncoming as any).insurer?.value ?? null : getIncoming('insurer') ?? getDb('insurer'),
+      policy_number: parsedIncoming ? (parsedIncoming as any).policy_number?.value ?? null : getIncoming('policy_number') ?? getDb('policy_number'),
+      vehicle_number: parsedIncoming ? (parsedIncoming as any).vehicle_number?.value ?? null : getIncoming('vehicle_number') ?? getDb('vehicle_number'),
+      issue_date: parsedIncoming ? (parsedIncoming as any).issue_date?.value ?? null : getIncoming('issue_date') ?? getDb('issue_date'),
+      expiry_date: parsedIncoming ? (parsedIncoming as any).expiry_date?.value ?? null : getIncoming('expiry_date') ?? getDb('expiry_date'),
+      total_premium: parsedIncoming ? (parsedIncoming as any).total_premium?.value ?? null : getIncoming('total_premium') ?? getDb('total_premium'),
+      idv: parsedIncoming ? (parsedIncoming as any).idv?.value ?? null : getIncoming('idv') ?? getDb('idv'),
+      make: parsedIncoming ? (parsedIncoming as any).make?.value ?? null : getIncoming('make') ?? (parsedFromDb as any)?.make?.value ?? null,
+      model: parsedIncoming ? (parsedIncoming as any).model?.value ?? null : getIncoming('model') ?? (parsedFromDb as any)?.model?.value ?? null,
+      variant: parsedIncoming ? (parsedIncoming as any).variant?.value ?? null : getIncoming('variant') ?? (parsedFromDb as any)?.variant?.value ?? null,
+      fuel_type: parsedIncoming ? (parsedIncoming as any).fuel_type?.value ?? null : getIncoming('fuel_type') ?? (parsedFromDb as any)?.fuel_type?.value ?? null,
     };
+
+         // Optional product_type from payload (already sanitized above)
+     const productTypeValue = parsedIncoming
+       ? (parsedIncoming as any).product_type?.value ?? null
+       : getIncoming('product_type');
+
+     // Optional vehicle_type from payload (already sanitized above)
+     const vehicleTypeValue = getIncoming('vehicle_type');
 
     // 3) Basic guards
     const required = ['insurer', 'policy_number', 'vehicle_number', 'issue_date', 'expiry_date', 'total_premium'];
@@ -72,49 +145,140 @@ router.post('/uploads/:id/confirm-save', async (req: AuthenticatedRequest, res, 
 
     // 4) Insert into policies (map to our schema and use safe defaults where required)
     const userId = req.user?.userId || null;
-    const insert = await pool.query(
-      `INSERT INTO policies (
-        policy_number, vehicle_number, insurer, product_type, vehicle_type, make,
-        issue_date, expiry_date, idv, ncb, discount, net_od, ref, total_od,
-        net_premium, total_premium, cashback_percentage, cashback_amount,
-        customer_paid, executive, caller_name, mobile, source, brokerage, cashback, created_by
-      ) VALUES (
-        $1, $2, $3, $4, $5, $6,
-        $7, $8, $9, $10, $11, $12, $13, $14,
-        $15, $16, $17, $18,
-        $19, $20, $21, $22, $23, $24, $25, $26
-      ) RETURNING id`,
-      [
-        String(merged.policy_number),
-        String(merged.vehicle_number),
-        String(merged.insurer),
-        'Private Car', // product_type
-        'Private Car', // vehicle_type
-        merged.make ?? 'Unknown',
-        String(merged.issue_date),
-        String(merged.expiry_date),
-        merged.idv != null ? Number(merged.idv) : 0,
-        0, // ncb
-        0, // discount
-        0, // net_od
-        null, // ref
-        0, // total_od
-        Number(merged.total_premium) || 0, // net_premium
-        Number(merged.total_premium) || 0, // total_premium
-        0, // cashback_percentage
-        0, // cashback_amount
-        Number(merged.total_premium) || 0, // customer_paid
-        'OPS', // executive (placeholder, NOT NULL)
-        'OPS', // caller_name (placeholder, NOT NULL)
-        '0000000000', // mobile (placeholder, NOT NULL)
-        'PDF_UPLOAD', // source
-        0, // brokerage
-        0, // cashback
-        userId,
-      ]
-    );
+    // Conditionally include product_type / vehicle_type / make if columns exist
+    const hasProductTypeCol = ((
+      await pool.query(
+        `SELECT 1 FROM information_schema.columns WHERE table_name = 'policies' AND column_name = 'product_type' LIMIT 1`
+      )
+    ).rowCount ?? 0) > 0;
+    const hasVehicleTypeCol = ((
+      await pool.query(
+        `SELECT 1 FROM information_schema.columns WHERE table_name = 'policies' AND column_name = 'vehicle_type' LIMIT 1`
+      )
+    ).rowCount ?? 0) > 0;
+         const hasMakeCol = ((
+       await pool.query(
+         `SELECT 1 FROM information_schema.columns WHERE table_name = 'policies' AND column_name = 'make' LIMIT 1`
+       )
+     ).rowCount ?? 0) > 0;
+     const hasNcbCol = ((
+       await pool.query(
+         `SELECT 1 FROM information_schema.columns WHERE table_name = 'policies' AND column_name = 'ncb' LIMIT 1`
+       )
+     ).rowCount ?? 0) > 0;
+     const hasNetOdCol = ((
+       await pool.query(
+         `SELECT 1 FROM information_schema.columns WHERE table_name = 'policies' AND column_name = 'net_od' LIMIT 1`
+       )
+     ).rowCount ?? 0) > 0;
+     const hasNetPremiumCol = ((
+       await pool.query(
+         `SELECT 1 FROM information_schema.columns WHERE table_name = 'policies' AND column_name = 'net_premium' LIMIT 1`
+       )
+     ).rowCount ?? 0) > 0;
+     const hasTotalOdCol = ((
+       await pool.query(
+         `SELECT 1 FROM information_schema.columns WHERE table_name = 'policies' AND column_name = 'total_od' LIMIT 1`
+       )
+     ).rowCount ?? 0) > 0;
+     const hasCustomerPaidCol = ((
+       await pool.query(
+         `SELECT 1 FROM information_schema.columns WHERE table_name = 'policies' AND column_name = 'customer_paid' LIMIT 1`
+       )
+     ).rowCount ?? 0) > 0;
+     const hasExecCol = ((
+       await pool.query(
+         `SELECT 1 FROM information_schema.columns WHERE table_name = 'policies' AND column_name = 'executive' LIMIT 1`
+       )
+     ).rowCount ?? 0) > 0;
+     const hasCallerNameCol = ((
+       await pool.query(
+         `SELECT 1 FROM information_schema.columns WHERE table_name = 'policies' AND column_name = 'caller_name' LIMIT 1`
+       )
+     ).rowCount ?? 0) > 0;
+     const hasMobileCol = ((
+       await pool.query(
+         `SELECT 1 FROM information_schema.columns WHERE table_name = 'policies' AND column_name = 'mobile' LIMIT 1`
+       )
+     ).rowCount ?? 0) > 0;
+     const hasSourceCol = ((
+       await pool.query(
+         `SELECT 1 FROM information_schema.columns WHERE table_name = 'policies' AND column_name = 'source' LIMIT 1`
+       )
+     ).rowCount ?? 0) > 0;
 
-    const policyId = insert.rows[0].id;
+    // Build dynamic column list and values
+    const cols: string[] = [
+      'insurer', 'policy_number', 'vehicle_number', 'issue_date', 'expiry_date', 'total_premium', 'idv'
+    ];
+         const vals: any[] = [
+       insurer,       // reason: use sanitized value (never NULL)
+       policyNumber,  // reason: use sanitized value (never NULL)
+       vehicleNumber, // reason: use sanitized value (never NULL)
+       String(merged.issue_date ?? ''),
+       String(merged.expiry_date ?? ''),
+       totalPremium,  // reason: use sanitized value (never NULL)
+       idv,           // reason: use sanitized value (never NULL)
+     ];
+         if (hasProductTypeCol) {
+       cols.push('product_type');
+       vals.push(productType);
+     }
+     if (hasVehicleTypeCol) {
+       cols.push('vehicle_type');
+       vals.push(vehicleType);
+     }
+     if (hasMakeCol) {
+       cols.push('make');
+       vals.push(make);
+     }
+     if (hasSourceCol) {
+       cols.push('source');
+       vals.push(source);
+     }
+     if (hasNcbCol) {
+       // ncb is guaranteed to be a number (0-100) from Zod schema
+       const ncbValue = (incoming as any)?.ncb ?? 0;
+       cols.push('ncb');
+       vals.push(Number(ncbValue));
+     }
+     if (hasNetOdCol) {
+       cols.push('net_od');
+       vals.push(netOd);  // reason: use sanitized value (never NULL)
+     }
+     if (hasNetPremiumCol) {
+       cols.push('net_premium');
+       vals.push(netPremium);  // reason: use sanitized value (never NULL)
+     }
+     if (hasTotalOdCol) {
+       cols.push('total_od');
+       vals.push(totalOd);  // reason: use sanitized value (never NULL)
+     }
+     if (hasCustomerPaidCol) {
+       cols.push('customer_paid');
+       vals.push(customerPaid);  // reason: use sanitized value (never NULL)
+     }
+     if (hasExecCol) {
+       cols.push('executive');
+       vals.push(executive);
+     }
+     if (hasCallerNameCol) {
+       cols.push('caller_name');
+       vals.push(callerName);
+     }
+     if (hasMobileCol) {
+       cols.push('mobile');
+       vals.push(mobile);
+     }
+
+    const placeholders = cols.map((_, i) => `$${i + 1}`).join(', ');
+    const insertQuery = `INSERT INTO policies (${cols.join(', ')}) VALUES (${placeholders}) RETURNING id`;
+    const insert = await pool.query(insertQuery, vals);
+
+    const policyId = (insert as any)?.rows?.[0]?.id;
+    if (!policyId) {
+      throw new Error('Policy insert did not return an id');
+    }
 
     // 5) Mark upload SAVED, falling back to COMPLETED if constraint disallows SAVED
     try {
