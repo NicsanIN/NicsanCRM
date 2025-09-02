@@ -15,6 +15,24 @@ async function setStatus(id: string | number, status: string) {
   );
 }
 
+let cachedFinalStatus: "REVIEW" | "COMPLETED" | null = null;
+async function determineFinalStatus(): Promise<"REVIEW" | "COMPLETED"> {
+  if (cachedFinalStatus) return cachedFinalStatus;
+  try {
+    const q = await pool.query(
+      `SELECT pg_get_constraintdef(c.oid) AS def
+       FROM pg_constraint c
+       JOIN pg_class t ON t.oid = c.conrelid
+       WHERE t.relname = 'pdf_uploads' AND c.conname ILIKE '%status%'`
+    );
+    const def: string = (q.rows[0]?.def || "").toUpperCase();
+    cachedFinalStatus = def.includes("'REVIEW'") ? "REVIEW" : "COMPLETED";
+  } catch (_e) {
+    cachedFinalStatus = "COMPLETED";
+  }
+  return cachedFinalStatus;
+}
+
 export async function processUpload(uploadId: string): Promise<void> {
   // 1) mark PROCESSING
   await setStatus(uploadId, "PROCESSING");
@@ -56,7 +74,8 @@ export async function processUpload(uploadId: string): Promise<void> {
       [JSON.stringify(merged), uploadId]
     );
 
-    await setStatus(uploadId, "REVIEW");
+    const finalStatus = await determineFinalStatus();
+    await setStatus(uploadId, finalStatus);
 
   } catch (e: any) {
     console.error("PROCESSOR_ERROR", { uploadId, name: e?.name, msg: e?.message });
