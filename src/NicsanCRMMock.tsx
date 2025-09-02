@@ -1228,7 +1228,26 @@ function PageReview() {
         setSubmitMessage({ type: 'error', message: 'No upload selected' });
         return;
       }
-      const resp = await uploadAPI.confirmAndSave(String(uploadId), {});
+      // Build a simple form object from current review data
+      const pdfData = reviewData?.extracted_data?.extracted_data || {};
+      const form = {
+        insurer: pdfData.insurer,
+        policy_number: pdfData.policy_number,
+        vehicle_number: pdfData.vehicle_number,
+        issue_date: pdfData.issue_date,
+        expiry_date: pdfData.expiry_date,
+        total_premium: pdfData.total_premium,
+        idv: pdfData.idv,
+        product_type: pdfData.product_type,
+        vehicle_type: pdfData.vehicle_type,
+        make: pdfData.make,
+        model: pdfData.model,
+        variant: pdfData.variant,
+        fuel_type: pdfData.fuel_type,
+        manual_extras: reviewData?.extracted_data?.manual_extras || {},
+      };
+
+      const resp = await uploadAPI.confirmAndSave(String(uploadId), form);
       if (resp.success) {
         setSubmitMessage({ type: 'success', message: 'Policy confirmed and saved successfully!' });
         // Remove from available list and clear review view

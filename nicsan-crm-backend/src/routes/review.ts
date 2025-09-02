@@ -35,22 +35,33 @@ router.post('/uploads/:id/confirm-save', async (req: AuthenticatedRequest, res, 
       return res.status(400).json({ success: false, error: 'No extracted_data to save' });
     }
 
-    const parsed = parsePolicyExtractV1(raw); // validates shape
-    const edits = (req.body?.edits ?? {}) as Record<string, any>;
+    const parsed = parsePolicyExtractV1(raw); // validates shape from extractor
+    // Accept either top-level Zod payload or legacy { edits }
+    const incoming = (req.body && (req.body as any).schema_version === '1.0')
+      ? (req.body as Record<string, any>)
+      : ((req.body?.edits ?? {}) as Record<string, any>);
+    // If frontend sent full Zod-shaped payload, parse and read from it; else unwrap values if objects
+    const isZodShapedPayload = typeof incoming === 'object' && incoming != null && incoming.schema_version === '1.0';
+    const parsedIncoming = isZodShapedPayload ? parsePolicyExtractV1(incoming) : null;
+    const getIncoming = (key: string) => {
+      const v = (incoming as any)[key];
+      if (v && typeof v === 'object' && 'value' in v) return (v as any).value;
+      return v ?? null;
+    };
     const getV = (k: keyof typeof parsed) => (parsed as any)[k]?.value ?? null;
 
     const merged: any = {
-      insurer: edits.insurer ?? getV('insurer'),
-      policy_number: edits.policy_number ?? getV('policy_number'),
-      vehicle_number: edits.vehicle_number ?? getV('vehicle_number'),
-      issue_date: edits.issue_date ?? getV('issue_date'),
-      expiry_date: edits.expiry_date ?? getV('expiry_date'),
-      total_premium: edits.total_premium ?? getV('total_premium'),
-      idv: edits.idv ?? getV('idv'),
-      make: edits.make ?? (parsed as any).make?.value ?? null,
-      model: edits.model ?? (parsed as any).model?.value ?? null,
-      variant: edits.variant ?? (parsed as any).variant?.value ?? null,
-      fuel_type: edits.fuel_type ?? (parsed as any).fuel_type?.value ?? null,
+      insurer: parsedIncoming ? (parsedIncoming as any).insurer?.value ?? null : getIncoming('insurer') ?? getV('insurer'),
+      policy_number: parsedIncoming ? (parsedIncoming as any).policy_number?.value ?? null : getIncoming('policy_number') ?? getV('policy_number'),
+      vehicle_number: parsedIncoming ? (parsedIncoming as any).vehicle_number?.value ?? null : getIncoming('vehicle_number') ?? getV('vehicle_number'),
+      issue_date: parsedIncoming ? (parsedIncoming as any).issue_date?.value ?? null : getIncoming('issue_date') ?? getV('issue_date'),
+      expiry_date: parsedIncoming ? (parsedIncoming as any).expiry_date?.value ?? null : getIncoming('expiry_date') ?? getV('expiry_date'),
+      total_premium: parsedIncoming ? (parsedIncoming as any).total_premium?.value ?? null : getIncoming('total_premium') ?? getV('total_premium'),
+      idv: parsedIncoming ? (parsedIncoming as any).idv?.value ?? null : getIncoming('idv') ?? getV('idv'),
+      make: parsedIncoming ? (parsedIncoming as any).make?.value ?? null : getIncoming('make') ?? (parsed as any).make?.value ?? null,
+      model: parsedIncoming ? (parsedIncoming as any).model?.value ?? null : getIncoming('model') ?? (parsed as any).model?.value ?? null,
+      variant: parsedIncoming ? (parsedIncoming as any).variant?.value ?? null : getIncoming('variant') ?? (parsed as any).variant?.value ?? null,
+      fuel_type: parsedIncoming ? (parsedIncoming as any).fuel_type?.value ?? null : getIncoming('fuel_type') ?? (parsed as any).fuel_type?.value ?? null,
     };
 
     // 3) Basic guards

@@ -110,6 +110,39 @@ async function apiCall<T>(
   }
 }
 
+// Helpers for Confirm & Save payload (Zod-shaped)
+const asNum = (v: any) => {
+  if (v === null || v === undefined || v === '') return undefined;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : undefined;
+};
+
+const wrapField = (val: any, src: 'manual' | 'extracted' = 'manual') => {
+  if (val && typeof val === 'object' && 'value' in val) return val as any;
+  const maybeNum = asNum(val);
+  return {
+    value: maybeNum !== undefined ? maybeNum : (val ?? ''),
+    source: src,
+    confidence: 1,
+  };
+};
+
+export const buildConfirmPayload = (form: any) => ({
+  schema_version: '1.0',
+  insurer:        wrapField(form?.insurer),
+  policy_number:  wrapField(form?.policy_number),
+  vehicle_number: wrapField(form?.vehicle_number),
+  issue_date:     wrapField(form?.issue_date),
+  expiry_date:    wrapField(form?.expiry_date),
+  total_premium:  wrapField(form?.total_premium),
+  idv:            wrapField(form?.idv),
+  product_type:   wrapField(form?.product_type),
+  vehicle_type:   wrapField(form?.vehicle_type),
+  make:           wrapField(form?.make),
+  model:          wrapField(form?.model),
+  manual_extras:  form?.manual_extras ?? {},
+});
+
 // Authentication API
 export const authAPI = {
   login: async (credentials: LoginRequest): Promise<ApiResponse<LoginResponse>> => {
@@ -306,10 +339,12 @@ export const uploadAPI = {
     });
   },
 
-  confirmAndSave: async (uploadId: string, edits: any): Promise<ApiResponse<any>> => {
+  confirmAndSave: async (uploadId: string, form: any): Promise<ApiResponse<any>> => {
+    const payload = buildConfirmPayload(form);
+    console.debug('🔧 confirm-save payload', payload);
     return apiCall(`/uploads/${uploadId}/confirm-save`, {
       method: 'POST',
-      body: JSON.stringify({ edits }),
+      body: JSON.stringify(payload),
     });
   },
 };
