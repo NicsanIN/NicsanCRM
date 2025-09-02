@@ -1,7 +1,8 @@
-import React, { useMemo, useState, useRef, useEffect } from "react";
+import React, { useMemo, useState, useRef, useEffect, useCallback } from "react";
 import { Upload, FileText, CheckCircle2, AlertTriangle, Table2, Settings, LayoutDashboard, Users, BarChart3, BadgeInfo, Filter, Lock, LogOut, Car, SlidersHorizontal, TrendingUp } from "lucide-react";
 import { ResponsiveContainer, CartesianGrid, BarChart, Bar, Legend, Area, AreaChart, XAxis, YAxis, Tooltip } from "recharts";
 import { uploadAPI, policiesAPI, authAPI, authUtils } from './services/api';
+import ErrorBoundary from './components/ErrorBoundary';
 
 // --- Nicsan CRM v1 UI/UX Mock (updated) ---
 // Adds: Password-protected login, optimized Manual Form, Founder filters, KPI dashboard (your new metrics)
@@ -68,11 +69,14 @@ function LoginPage({ onLogin }: { onLogin: (user: { name: string; email: string;
         }
         
         // Call onLogin with real user data
-        onLogin({ 
+        const userInfo = { 
           name: userData?.name || email.split('@')[0] || 'User', 
           email: userData?.email || email, 
           role: userData?.role || 'ops' 
-        });
+        };
+        console.log('🔍 Calling onLogin with:', userInfo);
+        onLogin(userInfo);
+        console.log('🔍 onLogin completed');
       } else {
         setError(response.error || 'Login failed');
       }
@@ -216,6 +220,7 @@ function OpsSidebar({ page, setPage }: { page: string; setPage: (p: string) => v
 
 function PageUpload() {
   const [uploadStatus, setUploadStatus] = useState<string>('');
+  const [toast, setToast] = useState<{type: 'success' | 'error', message: string} | null>(null);
   const [uploadedFiles, setUploadedFiles] = useState<any[]>([]);
   const [selectedInsurer, setSelectedInsurer] = useState<'TATA_AIG' | 'DIGIT'>('TATA_AIG');
   const [manualExtras, setManualExtras] = useState({
@@ -265,55 +270,125 @@ function PageUpload() {
       const result = await uploadAPI.uploadPDF(formData);
       
       if (result.success) {
-        setUploadStatus('Upload successful! Ready for review.');
-        const newFile = {
-          id: result.data?.uploadId || Date.now(),
-          filename: file.name,
-          status: 'UPLOADED',
-          insurer: selectedInsurer,
-          s3_key: `uploads/${Date.now()}_${file.name}`,
-          time: new Date().toLocaleTimeString(),
-          size: (file.size / 1024 / 1024).toFixed(2) + ' MB',
-          // Structure that matches Review page expectations
-          extracted_data: {
+        setUploadStatus('Upload successful! Creating server record...');
+        
+        // Create server-side upload record
+        const s3Key = result.data?.s3_key || `uploads/${Date.now()}_${file.name}`;
+        const serverResp = await uploadAPI.createUpload(file.name, s3Key, selectedInsurer);
+        
+        if (serverResp.success && serverResp.data) {
+          setUploadStatus('Upload successful! Ready for review.');
+          setToast({type: 'success', message: 'Upload successful! Server record created.'});
+          // Auto-dismiss toast after 3 seconds
+          setTimeout(() => setToast(null), 3000);
+          
+          // Use server data as the primary record
+          const serverItem = serverResp.data;
+          const newFile = {
+            id: serverItem.id,
+            filename: serverItem.filename,
+            status: serverItem.upload_status || 'UPLOADED',
             insurer: selectedInsurer,
-            status: 'UPLOADED',
-            manual_extras: { ...manualExtras },
+            s3_key: serverItem.s3_key || s3Key,
+            time: new Date().toLocaleTimeString(),
+            size: (file.size / 1024 / 1024).toFixed(2) + ' MB',
+            // Structure that matches Review page expectations
             extracted_data: {
-              // Mock PDF data for demo (in real app, this comes from your extractor)
-              policy_number: "TA-" + Math.floor(Math.random() * 10000),
-              vehicle_number: "KA01AB" + Math.floor(Math.random() * 1000),
-              insurer: selectedInsurer === 'TATA_AIG' ? 'Tata AIG' : 'Digit',
-              product_type: "Private Car",
-              vehicle_type: "Private Car",
-              make: "Maruti",
-              model: "Swift",
-              cc: "1197",
-              manufacturing_year: "2021",
-              issue_date: new Date().toISOString().split('T')[0],
-              expiry_date: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-              idv: 495000,
-              ncb: 20,
-              discount: 0,
-              net_od: 5400,
-              ref: "",
-              total_od: 7200,
-              net_premium: 10800,
-              total_premium: 12150,
-              confidence_score: 0.86
+              insurer: selectedInsurer,
+              status: 'UPLOADED',
+              manual_extras: { ...manualExtras },
+              extracted_data: {
+                // Mock PDF data for demo (in real app, this comes from your extractor)
+                policy_number: "TA-" + Math.floor(Math.random() * 10000),
+                vehicle_number: "KA01AB" + Math.floor(Math.random() * 1000),
+                insurer: selectedInsurer === 'TATA_AIG' ? 'Tata AIG' : 'Digit',
+                product_type: "Private Car",
+                vehicle_type: "Private Car",
+                make: "Maruti",
+                model: "Swift",
+                cc: "1197",
+                manufacturing_year: "2021",
+                issue_date: new Date().toISOString().split('T')[0],
+                expiry_date: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+                idv: 495000,
+                ncb: 20,
+                discount: 0,
+                net_od: 5400,
+                ref: "",
+                total_od: 7200,
+                net_premium: 10800,
+                total_premium: 12150,
+                confidence_score: 0.86
+              }
             }
+          };
+          
+          setUploadedFiles(prev => [newFile, ...prev]);
+          
+          // Save to localStorage so Review page can access it
+          const allUploads = [newFile, ...uploadedFiles];
+          localStorage.setItem('nicsan_crm_uploads', JSON.stringify(allUploads));
+          console.log('💾 Saved uploads to localStorage:', allUploads);
+          
+          // Start polling for status updates
+          pollUploadStatus(serverItem.id);
+        } else {
+          // Fallback to local-only record if server creation fails
+          setUploadStatus('Upload successful! (Server record creation failed)');
+          setToast({type: 'error', message: 'Upload successful but server record creation failed.'});
+          // Auto-dismiss toast after 5 seconds for errors
+          setTimeout(() => setToast(null), 5000);
+          const newFile = {
+            id: result.data?.id || Date.now(),
+            filename: file.name,
+            status: 'UPLOADED',
+            insurer: selectedInsurer,
+            s3_key: s3Key,
+            time: new Date().toLocaleTimeString(),
+            size: (file.size / 1024 / 1024).toFixed(2) + ' MB',
+            // Structure that matches Review page expectations
+            extracted_data: {
+              insurer: selectedInsurer,
+              status: 'UPLOADED',
+              manual_extras: { ...manualExtras },
+              extracted_data: {
+                // Mock PDF data for demo (in real app, this comes from your extractor)
+                policy_number: "TA-" + Math.floor(Math.random() * 10000),
+                vehicle_number: "KA01AB" + Math.floor(Math.random() * 1000),
+                insurer: selectedInsurer === 'TATA_AIG' ? 'Tata AIG' : 'Digit',
+                product_type: "Private Car",
+                vehicle_type: "Private Car",
+                make: "Maruti",
+                model: "Swift",
+                cc: "1197",
+                manufacturing_year: "2021",
+                issue_date: new Date().toISOString().split('T')[0],
+                expiry_date: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+                idv: 495000,
+                ncb: 20,
+                discount: 0,
+                net_od: 5400,
+                ref: "",
+                total_od: 7200,
+                net_premium: 10800,
+                total_premium: 12150,
+                confidence_score: 0.86
+              }
+            }
+          };
+          
+          setUploadedFiles(prev => [newFile, ...prev]);
+          
+          // Save to localStorage so Review page can access it
+          const allUploads = [newFile, ...uploadedFiles];
+          localStorage.setItem('nicsan_crm_uploads', JSON.stringify(allUploads));
+          console.log('💾 Saved uploads to localStorage (fallback):', allUploads);
+          
+          // Start polling for status updates
+          if (result.data?.id) {
+            pollUploadStatus(result.data.id);
           }
-        };
-        
-        setUploadedFiles(prev => [newFile, ...prev]);
-        
-        // Save to localStorage so Review page can access it
-        const allUploads = [newFile, ...uploadedFiles];
-        localStorage.setItem('nicsan_crm_uploads', JSON.stringify(allUploads));
-        console.log('💾 Saved uploads to localStorage:', allUploads);
-        
-        // Start polling for status updates
-        pollUploadStatus(result.data?.uploadId);
+        }
         
         // Clear manual extras after successful upload
         setManualExtras({
@@ -345,8 +420,8 @@ function PageUpload() {
       try {
         const response = await uploadAPI.getUploadById(uploadId);
         
-        if (response.success) {
-          const status = response.data.status;
+        if (response.success && response.data) {
+          const status = response.data.upload_status;
           
           // Update local state
           setUploadedFiles(prev => {
@@ -368,11 +443,11 @@ function PageUpload() {
             return updated;
           });
           
-          if (status === 'REVIEW' || status === 'COMPLETED') {
+          if (status === 'review' || status === 'completed') {
             setUploadStatus('PDF processed successfully! Ready for review.');
             
             // Show notification for review
-            if (status === 'REVIEW') {
+            if (status === 'review') {
               // In a real app, you might want to show a toast notification
               console.log('🎉 PDF ready for review! Check the Review & Confirm page.');
               
@@ -389,7 +464,7 @@ function PageUpload() {
             }
             
             return; // Stop polling
-          } else if (status === 'FAILED') {
+          } else if (status === 'failed') {
             setUploadStatus('PDF processing failed. Please try again.');
             return; // Stop polling
           }
@@ -698,6 +773,26 @@ function PageUpload() {
           </div>
         </div>
       </Card>
+
+      {/* Toast Notification */}
+      {toast && (
+        <div className={`fixed top-4 right-4 z-50 p-4 rounded-lg shadow-lg ${
+          toast.type === 'success' 
+            ? 'bg-green-500 text-white' 
+            : 'bg-red-500 text-white'
+        }`}>
+          <div className="flex items-center gap-2">
+            <span>{toast.type === 'success' ? '✓' : '✗'}</span>
+            <span>{toast.message}</span>
+            <button 
+              onClick={() => setToast(null)}
+              className="ml-2 text-white hover:text-gray-200"
+            >
+              ×
+            </button>
+          </div>
+        </div>
+      )}
     </>
   )
 }
@@ -1102,121 +1197,105 @@ function PageManualGrid() {
   )
 }
 
+// NicsanCRMMock.tsx (top of component)
+const LS_KEY = 'nicsan.uploads';
+
+type UploadRow = {
+  id: string;
+  filename: string;
+  status?: 'UPLOADED' | 'PROCESSING' | 'REVIEW' | 'COMPLETED' | string;
+  upload_status?: 'pending' | 'completed' | 'failed' | 'review';
+  insurer?: string | null;
+  s3_key: string;
+  created_at?: string;
+  extracted_data?: any;
+};
+
+const loadUploadsFromLS = (): UploadRow[] => {
+  try {
+    const raw = localStorage.getItem(LS_KEY);
+    if (!raw) return [];
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) ? arr : [];
+  } catch { return []; }
+};
+
+const saveUploadsToLS = (rows: UploadRow[]) => {
+  try { localStorage.setItem(LS_KEY, JSON.stringify(rows)); } catch {}
+};
+
 function PageReview({ user }: { user: {name:string; email?:string; role:"ops"|"founder"} }) {
   const [reviewData, setReviewData] = useState<any>(null);
-  const [isLoading, setIsLoading] = useState(false);
   const [saveMessage, setSaveMessage] = useState<{type: 'success' | 'error', message: string} | null>(null);
   const [submitMessage, setSubmitMessage] = useState<{type: 'success' | 'error', message: string} | null>(null);
-  const [availableUploads, setAvailableUploads] = useState<any[]>([]);
-  const [selectedUpload, setSelectedUpload] = useState<string>('');
+  const [selectedKey, setSelectedKey] = useState<string>('');
   const [recentPolicies, setRecentPolicies] = useState<any[]>([]);
+  const [selectedKind, setSelectedKind] = useState<'upload'|'policy'|null>(null);
+  const [selectedId, setSelectedId] = useState<string|undefined>();
+  const [selectedUploadId, setSelectedUploadId] = useState<string|undefined>();
+  const [selectedPolicyId, setSelectedPolicyId] = useState<string|undefined>();
+  const [uploadId, setUploadId] = useState<string>('');
+  const [pdfData, setPdfData] = useState<any>({});
 
-    // Load available uploads for review
-  useEffect(() => {
-    const loadAvailableUploads = async () => {
-      try {
-        console.log('🔄 Loading available uploads...');
+  // keep previous list while fetching
+  const [uploads, setUploads] = React.useState<UploadRow[]>(() => loadUploadsFromLS());
+  const [isLoading, setIsLoading] = React.useState(false);
+  const didInit = React.useRef(false);
+
+  const refreshUploads = React.useCallback(async () => {
+    setIsLoading(true);
+    try {
+      const resp = await uploadAPI.getUploads(1, 50, ['UPLOADED','PROCESSING','REVIEW','COMPLETED']);
+      if (Array.isArray(resp)) {
+        // Merge server uploads with local uploads, avoiding duplicates
+        const localUploads = loadUploadsFromLS();
+        const serverIds = new Set(resp.map(u => u.id));
+        const uniqueLocalUploads = localUploads.filter(u => !serverIds.has(u.id));
+        const mergedUploads = [...resp, ...uniqueLocalUploads];
         
-        // First, try to get real uploads from localStorage (from PDF upload page)
-        const storedUploads = localStorage.getItem('nicsan_crm_uploads');
-        let realUploads = [];
-        
-        if (storedUploads) {
-          try {
-            realUploads = JSON.parse(storedUploads);
-            console.log('📋 Found stored uploads:', realUploads);
-            console.log('📋 Upload count:', realUploads.length);
-            console.log('📋 First upload structure:', realUploads[0]);
-          } catch (e) {
-            console.error('Failed to parse stored uploads:', e);
-          }
-        } else {
-          console.log('📋 No uploads found in localStorage');
-        }
-        
-        // If no real uploads, show mock data for demo
-        if (realUploads.length === 0) {
-          console.log('📋 No real uploads found, showing mock data');
-          setAvailableUploads([
-            { 
-              id: 'mock_1', 
-              filename: 'policy_TA_9921.pdf', 
-              status: 'REVIEW',
-              s3_key: 'uploads/1/1234567890_policy_TA_9921.pdf',
-              extracted_data: {
-                insurer: 'TATA_AIG',
-                status: 'REVIEW',
-                manual_extras: {
-                  executive: "Rahul Kumar",
-                  callerName: "Priya Singh",
-                  mobile: "9876543210",
-                  rollover: "RENEWAL-2025",
-                  remark: "Customer requested early renewal with NCB benefits",
-                  brokerage: 500,
-                  cashback: 600,
-                  customerPaid: 11550,
-                  customerChequeNo: "CHQ-001234",
-                  ourChequeNo: "OUR-567890"
-                },
-                extracted_data: {
-                  policy_number: "TA-9921",
-                  vehicle_number: "KA01AB1234",
-                  insurer: "Tata AIG",
-                  product_type: "Private Car",
-                  vehicle_type: "Private Car",
-                  make: "Maruti",
-                  model: "Swift",
-                  cc: "1197",
-                  manufacturing_year: "2021",
-                  issue_date: "2025-08-10",
-                  expiry_date: "2026-08-09",
-                  idv: 495000,
-                  ncb: 20,
-                  discount: 0,
-                  net_od: 5400,
-                  ref: "",
-                  total_od: 7200,
-                  net_premium: 10800,
-                  total_premium: 12150,
-                  confidence_score: 0.86
-                }
-              }
-            }
-          ]);
-        } else {
-          // Show real uploads
-          console.log('📋 Showing real uploads:', realUploads);
-          setAvailableUploads(realUploads);
-        }
-      } catch (error) {
-        console.error('Failed to load uploads:', error);
+        setUploads(mergedUploads);
+        saveUploadsToLS(mergedUploads);
+      } else {
+        // keep showing previous uploads if API failed
+        console.warn('getUploads failed, keeping cached list', resp);
       }
-    };
-    
-    loadAvailableUploads();
-    
-    // Auto-refresh every 5 seconds to check for new uploads
-    const interval = setInterval(loadAvailableUploads, 5000);
-    
-    return () => clearInterval(interval);
+    } catch (e) {
+      console.warn('getUploads error, keeping cached list', e);
+    } finally {
+      setIsLoading(false);
+    }
   }, []);
 
-  // Load recent policies
+  React.useEffect(() => {
+    if (didInit.current) return; // guard StrictMode double run
+    didInit.current = true;
+    // kick off in background; UI already hydrated from LS
+    refreshUploads();
+  }, [refreshUploads]);
+
+  const refreshRecentPolicies = async () => {
+    try {
+      const rec = await policiesAPI.getRecent(6);
+      if (rec.success) setRecentPolicies(rec.data ?? []);
+    } catch (e) {
+      console.warn('refresh recent policies failed', e);
+    }
+  };
+
+  // Load recent policies and pending uploads for grouped dropdown
   useEffect(() => {
     (async () => {
-      try {
-        const resp = await policiesAPI.getRecent(6);      // get last six policies
-        if (resp.ok) setRecentPolicies(resp.data ?? []);
-      } catch (e) {
-        console.warn('recent policies fetch failed', e); // don't block page
-      }
+      await Promise.all([
+        refreshUploads(),
+        refreshRecentPolicies(),
+      ]);
     })();
   }, []);
 
   const loadUploadData = async (uploadId: string) => {
     try {
       // In real app, this would fetch the actual upload data from backend
-      const upload = availableUploads.find(u => u.id === uploadId);
+      const upload = uploads.find(u => u.id === uploadId);
       if (upload) {
         setReviewData(upload);
         setSubmitMessage({ 
@@ -1232,42 +1311,115 @@ function PageReview({ user }: { user: {name:string; email?:string; role:"ops"|"f
     }
   };
 
+  const EMPTY_EXTRACT = { manual_extras: {} };
+
+  const handleLoadUploadData = async () => {
+    if (!selectedKey) return;
+
+    const [kind, a, b] = selectedKey.split(':');
+
+    try {
+      if (kind === 'upload') {
+        const uploadId = a;
+        const resp = await uploadAPI.getUploadById(uploadId);
+        if (!resp?.success || !resp?.data) throw new Error('UPLOAD_FETCH_FAILED');
+        
+        const review = resp.data;
+        setReviewData({ extracted_data: review.extracted_data ?? {} });
+        setPdfData(review.extracted_data ?? {});
+        setUploadId(review.id);
+        setSubmitMessage({ 
+          type: 'success', 
+          message: 'Server upload data loaded successfully! Please review before saving.' 
+        });
+        return;
+      }
+
+      if (kind === 'local') {
+        const uploadId = a;
+        const local = uploads.find(u => String(u.id) === uploadId);
+        if (!local) throw new Error('Local upload not found');
+        
+        // Use local data directly
+        const extracted_data = local.extracted_data ?? {};
+        setReviewData({ extracted_data });
+        setPdfData(extracted_data);
+        setUploadId(local.id);
+        setSubmitMessage({ 
+          type: 'success', 
+          message: 'Local upload data loaded successfully! Please review before saving.' 
+        });
+        return;
+      }
+
+      if (kind === 'policy') {
+        const policyId = a;
+        const uploadId = b;
+        if (!uploadId) {
+          alert('This policy has no linked upload. Policy detail view not implemented yet.');
+          return;
+        }
+        
+        const resp = await uploadAPI.getUploadById(uploadId);
+        if (!resp?.success || !resp?.data) throw new Error('UPLOAD_FETCH_FAILED');
+        
+        const review = resp.data;
+        setReviewData({ extracted_data: review.extracted_data ?? {} });
+        setPdfData(review.extracted_data ?? {});
+        setUploadId(review.id);
+        setSubmitMessage({ 
+          type: 'success', 
+          message: 'Policy upload data loaded successfully! Please review before saving.' 
+        });
+        return;
+      }
+    } catch (e) {
+      console.error('Load upload failed', e);
+      alert('Could not load upload data.');
+    }
+  };
+
   const handleConfirmAndSave = async () => {
     setIsLoading(true);
     setSaveMessage(null);
     try {
-      const uploadId = reviewData?.id || selectedUpload;
       if (!uploadId) {
         setSubmitMessage({ type: 'error', message: 'No upload selected' });
         return;
       }
       // Build a simple form object from current review data
-      const pdfData = reviewData?.extracted_data?.extracted_data || {};
       const form = {
-        insurer: pdfData.insurer,
-        policy_number: pdfData.policy_number,
-        vehicle_number: pdfData.vehicle_number,
-        issue_date: pdfData.issue_date,
-        expiry_date: pdfData.expiry_date,
-        total_premium: pdfData.total_premium,
-        idv: pdfData.idv,
+        insurer: field('insurer'),
+        policy_number: field('policy_number'),
+        vehicle_number: field('vehicle_number'),
+        issue_date: field('issue_date'),
+        expiry_date: field('expiry_date'),
+        total_premium: field('total_premium'),
+        idv: field('idv'),
         product_type: 'MOTOR',
-        vehicle_type: pdfData.vehicle_type,
-        make: pdfData.make,
-        model: pdfData.model,
-        variant: pdfData.variant,
-        fuel_type: pdfData.fuel_type,
+        vehicle_type: field('vehicle_type', 'PRIVATE'),
+        make: field('make'),
+        model: field('model'),
+        variant: field('variant'),
+        fuel_type: field('fuel_type'),
         executive: user?.name ?? 'OPS',
         caller_name: user?.name ?? 'NA',
         mobile: '0000000000', // Default mobile since user object doesn't have mobile
         manual_extras: reviewData?.extracted_data?.manual_extras || {},
       };
 
-      const resp = await uploadAPI.confirmAndSave(String(uploadId), form);
+      const resp = await uploadAPI.confirmAndSave(uploadId, form);
       if (resp.success) {
         setSubmitMessage({ type: 'success', message: 'Policy confirmed and saved successfully!' });
+        
+        // Refresh both lists after successful save
+        await Promise.all([
+          refreshUploads(),          // repull pending
+          refreshRecentPolicies(),   // repull recent 6
+        ]);
+        
         // Remove from available list and clear review view
-        setAvailableUploads(prev => prev.filter(u => u.id !== uploadId));
+        setUploads(prev => prev.filter(u => u.id !== uploadId));
         setTimeout(() => {
           setReviewData(null);
           setSaveMessage(null);
@@ -1289,7 +1441,7 @@ function PageReview({ user }: { user: {name:string; email?:string; role:"ops"|"f
   };
 
   // For demo purposes, show mock data
-  if (!reviewData && availableUploads.length === 0) {
+  if (!reviewData && uploads.length === 0 && !isLoading) {
     return (
       <Card title="Review & Confirm" desc="Review PDF data + manual extras before saving">
         <div className="text-center py-8 text-zinc-500">
@@ -1302,7 +1454,7 @@ function PageReview({ user }: { user: {name:string; email?:string; role:"ops"|"f
           
           {/* Debug Info */}
           <div className="mt-4 p-3 bg-yellow-50 rounded-lg text-yellow-700 text-sm">
-            🔍 <strong>Debug:</strong> availableUploads.length = {availableUploads.length}
+            🔍 <strong>Debug:</strong> uploads.length = {uploads.length}
             <br />
             🔍 <strong>Debug:</strong> reviewData = {reviewData ? 'exists' : 'null'}
             <br />
@@ -1374,27 +1526,29 @@ function PageReview({ user }: { user: {name:string; email?:string; role:"ops"|"f
     );
   }
 
-  // Show upload selection if no specific upload is loaded
-  if (!reviewData && availableUploads.length > 0) {
+  // Show upload selection if no specific upload is loaded and we have options
+  if (!reviewData && (uploads.length > 0 || recentPolicies.length > 0 || isLoading)) {
     return (
       <Card title="Review & Confirm" desc="Select an upload to review">
         <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
           <div className="text-sm text-blue-800">
             💡 <strong>Workflow:</strong> PDF Upload → Manual Extras → Review & Confirm → Save to Database
+            {isLoading && (
+              <div className="mt-2 text-xs text-blue-600">
+                🔄 Loading uploads...
+              </div>
+            )}
           </div>
         </div>
         
         {/* Debug Info */}
         <div className="mb-4 p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
           <div className="text-sm text-yellow-800">
-            🔍 <strong>Debug:</strong> Found {availableUploads.length} upload(s) in localStorage
-            {availableUploads.length > 0 && (
+            🔍 <strong>Debug:</strong> Found {uploads.length} uploads, {recentPolicies.length} recent policies {isLoading && '(loading...)'}
+            {(uploads.length > 0 || recentPolicies.length > 0) && (
               <div className="mt-2 text-xs">
-                {availableUploads.map(upload => (
-                  <div key={upload.id}>
-                    • {upload.filename} - Status: {upload.status} - Insurer: {upload.extracted_data?.insurer || 'N/A'}
-                  </div>
-                ))}
+                <div><strong>Uploads:</strong> {uploads.map(u => u.filename).join(', ')}</div>
+                <div><strong>Recent:</strong> {recentPolicies.map(p => p.policy_number).join(', ')}</div>
               </div>
             )}
           </div>
@@ -1411,7 +1565,7 @@ function PageReview({ user }: { user: {name:string; email?:string; role:"ops"|"f
                     if (storedUploads) {
                       const realUploads = JSON.parse(storedUploads);
                       console.log('🔄 Refreshed uploads from localStorage:', realUploads);
-                      setAvailableUploads(realUploads);
+                      setUploads(realUploads);
                     } else {
                       console.log('📋 No uploads found in localStorage');
                     }
@@ -1427,21 +1581,81 @@ function PageReview({ user }: { user: {name:string; email?:string; role:"ops"|"f
             </button>
           </div>
           <div className="flex items-center gap-3">
-            <select 
-              value={selectedUpload} 
-              onChange={(e) => setSelectedUpload(e.target.value)}
-              className="px-3 py-2 border rounded-lg text-sm"
+                        <select
+              className="w-full px-3 py-2 border rounded-lg text-sm"
+              value={selectedKey}
+              onChange={(e) => {
+                const val = e.target.value;
+                setSelectedKey(val);
+
+                const [kind, a, b] = val.split(':');
+
+                if (kind === 'upload') {
+                  setSelectedUploadId(a);
+                  setSelectedPolicyId(undefined);
+                  setSelectedId(a);
+                  setSelectedKind('upload');
+                  return;
+                }
+
+                if (kind === 'local') {
+                  setSelectedUploadId(a);
+                  setSelectedPolicyId(undefined);
+                  setSelectedId(a);
+                  setSelectedKind('upload');
+                  return;
+                }
+
+                if (kind === 'policy') {
+                  const policyId = a;
+                  const uploadId = b; // might be undefined for old rows
+                  if (!uploadId) {
+                    alert('This policy has no linked upload. Policy detail view not implemented yet.');
+                    return;
+                  }
+                  setSelectedPolicyId(policyId);
+                  setSelectedUploadId(uploadId);
+                  setSelectedId(uploadId);
+                  setSelectedKind('policy');
+                }
+              }}
             >
-              <option value="">Select an upload to review...</option>
-              {availableUploads.map(upload => (
-                <option key={upload.id} value={upload.id}>
-                  {upload.filename} ({upload.extracted_data?.insurer || 'N/A'}) - {upload.status}
-                </option>
-              ))}
+              <option value="">Select an upload to review…</option>
+
+              {/* Uploads */}
+              {uploads.length > 0 && (
+                <optgroup label="📄 Uploads">
+                  {uploads.map(u => (
+                    <option key={`upload:${u.id}`} value={`upload:${u.id}`}>
+                      {u.filename} - {u.status || u.upload_status || 'UNKNOWN'}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
+
+              {/* Recent policies (only if they have a linked upload_id) */}
+              {recentPolicies.length > 0 && (
+                <optgroup label="Recent policies">
+                  {recentPolicies
+                    .filter(p => !!p.upload_id) // disable ones without a link
+                    .map(p => (
+                      <option key={`policy:${p.id}:${p.upload_id}`} value={`policy:${p.id}:${p.upload_id}`}>
+                        {p.policy_number || 'NA'} · Veh {p.vehicle_number || 'NA'} ({p.insurer})
+                      </option>
+                    ))}
+                  {recentPolicies
+                    .filter(p => !p.upload_id) // show ones without upload_id as disabled
+                    .map(p => (
+                      <option key={`policy:${p.id}`} value={`policy:${p.id}`} disabled>
+                        {p.policy_number || 'NA'} · Veh {p.vehicle_number || 'NA'} ({p.insurer}) — no linked upload
+                      </option>
+                    ))}
+                </optgroup>
+              )}
             </select>
             <button 
-              onClick={() => loadUploadData(selectedUpload)}
-              disabled={!selectedUpload}
+              onClick={handleLoadUploadData}
+              disabled={!selectedKey}
               className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm disabled:opacity-50 disabled:cursor-not-allowed"
             >
               Load Upload Data
@@ -1452,10 +1666,45 @@ function PageReview({ user }: { user: {name:string; email?:string; role:"ops"|"f
     );
   }
 
-  const data = reviewData;
+  // Guard the Review UI so it doesn't crash when API is down/empty
+  if (!selectedKey) {
+    return <div className="text-sm text-gray-500">Pick an item above and click "Load Upload Data".</div>;
+  }
+
+  if (isLoading) {
+    return <div>Loading upload data…</div>;
+  }
+
+  if (!reviewData && !pdfData) {
+    return <div className="text-red-600 text-sm">Could not load upload data.</div>;
+  }
+
+  // Prevent undefined dereferences
+  const safePdfData = pdfData ?? {};
+  const safeReview = reviewData ?? {};
+  const extracted = safeReview.extracted_data ?? {};   // <- use this instead of `data`
+  const manualExtras = extracted.manual_extras ?? {};
+
+  // Small helper so templates stay clean
+  const field = (k: string, fallback: any = '') =>
+    extracted?.[k]?.value ?? safePdfData?.[k] ?? fallback;
   
+  // Guard UI when upload is still processing
+  if (selectedKind === 'upload' && selectedId) {
+    const currentUpload = uploads.find(u => u.id === selectedId);
+    if (currentUpload?.status === 'PROCESSING' || currentUpload?.upload_status === 'pending') {
+      return (
+        <Card title="Review & Confirm" desc="Review PDF data + manual extras before saving">
+          <div className="p-3 rounded bg-yellow-50 border border-yellow-200 text-yellow-900">
+            The upload is still processing. Please refresh in a few seconds.
+          </div>
+        </Card>
+      );
+    }
+  }
+
   // Safety check - if no data, show error
-  if (!data || !data.extracted_data) {
+  if (!reviewData) {
     return (
       <Card title="Review & Confirm" desc="Review PDF data + manual extras before saving">
         <div className="text-center py-8 text-red-500">
@@ -1463,15 +1712,12 @@ function PageReview({ user }: { user: {name:string; email?:string; role:"ops"|"f
           <div className="text-lg font-medium mb-2">Data Error</div>
           <div className="text-sm">No valid data found for review. Please try selecting an upload again.</div>
           <div className="mt-4 p-3 bg-red-50 rounded-lg text-red-700 text-sm">
-            🔍 <strong>Debug:</strong> data = {JSON.stringify(data, null, 2)}
+            🔍 <strong>Debug:</strong> reviewData = {JSON.stringify(reviewData, null, 2)}
           </div>
         </div>
       </Card>
     );
   }
-  
-  const pdfData = data.extracted_data.extracted_data;
-  const manualExtras = data.extracted_data.manual_extras;
 
   return (
     <>
@@ -1490,9 +1736,9 @@ function PageReview({ user }: { user: {name:string; email?:string; role:"ops"|"f
         {/* File Info */}
         <div className="mb-4 p-3 bg-zinc-50 rounded-lg">
           <div className="flex items-center gap-4 text-sm">
-            <div><span className="font-medium">File:</span> {data.filename}</div>
-            <div><span className="font-medium">Status:</span> {data.status}</div>
-            <div><span className="font-medium">S3 Key:</span> {data.s3_key}</div>
+            <div><span className="font-medium">File:</span> {safeReview.filename ?? ''}</div>
+            <div><span className="font-medium">Status:</span> {safeReview.status ?? ''}</div>
+            <div><span className="font-medium">S3 Key:</span> {safeReview.s3_key ?? ''}</div>
           </div>
         </div>
 
@@ -1501,19 +1747,19 @@ function PageReview({ user }: { user: {name:string; email?:string; role:"ops"|"f
           <div className="flex items-center gap-2">
             <div className="text-sm font-medium">AI Confidence Score:</div>
             <span className={`px-2 py-1 rounded-full text-xs font-medium ${
-              pdfData.confidence_score >= 0.8 
+              (field('confidence_score', 0)) >= 0.8 
                 ? 'bg-green-100 text-green-700'
-                : pdfData.confidence_score >= 0.6
+                : (field('confidence_score', 0)) >= 0.6
                 ? 'bg-yellow-100 text-yellow-700'
                 : 'bg-red-100 text-red-700'
             }`}>
-              {Math.round(pdfData.confidence_score * 100)}%
+              {Math.round((field('confidence_score', 0)) * 100)}%
             </span>
           </div>
           <div className="text-xs text-zinc-600 mt-1">
-            {pdfData.confidence_score >= 0.8 
+            {(field('confidence_score', 0)) >= 0.8 
               ? 'High confidence - data looks good'
-              : pdfData.confidence_score >= 0.6
+              : (field('confidence_score', 0)) >= 0.6
               ? 'Medium confidence - please review carefully'
               : 'Low confidence - manual review required'
             }
@@ -1523,96 +1769,96 @@ function PageReview({ user }: { user: {name:string; email?:string; role:"ops"|"f
         {/* PDF Extracted Data Section */}
         <div className="mb-6">
           <div className="text-sm font-medium mb-3 text-green-700 bg-green-50 px-3 py-2 rounded-lg">
-            📄 PDF Extracted Data (AI Confidence: {Math.round(pdfData.confidence_score * 100)}%)
+            📄 PDF Extracted Data (AI Confidence: {Math.round((field('confidence_score', 0)) * 100)}%)
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <LabeledInput 
               label="Policy Number" 
-              value={pdfData.policy_number}
+              value={field('policy_number')}
               onChange={() => {}} // Read-only for review
               hint="auto-read from PDF"
             />
             <LabeledInput 
               label="Vehicle Number" 
-              value={pdfData.vehicle_number}
+              value={field('vehicle_number')}
               onChange={() => {}} // Read-only for review
               hint="check format"
             />
             <LabeledInput 
               label="Insurer" 
-              value={pdfData.insurer}
+              value={field('insurer')}
               onChange={() => {}} // Read-only for review
             />
             <LabeledInput 
               label="Product Type" 
-              value={pdfData.product_type}
+              value={field('product_type')}
               onChange={() => {}} // Read-only for review
             />
             <LabeledInput 
               label="Make" 
-              value={pdfData.make}
+              value={field('make')}
               onChange={() => {}} // Read-only for review
             />
             <LabeledInput 
               label="Model" 
-              value={pdfData.model}
+              value={field('model')}
               onChange={() => {}} // Read-only for review
             />
             <LabeledInput 
               label="CC" 
-              value={pdfData.cc}
+              value={field('cc')}
               onChange={() => {}} // Read-only for review
               hint="engine size"
             />
             <LabeledInput 
               label="Manufacturing Year" 
-              value={pdfData.manufacturing_year}
+              value={field('manufacturing_year')}
               onChange={() => {}} // Read-only for review
             />
             <LabeledInput 
               label="Issue Date" 
-              value={pdfData.issue_date}
+              value={field('issue_date')}
               onChange={() => {}} // Read-only for review
             />
             <LabeledInput 
               label="Expiry Date" 
-              value={pdfData.expiry_date}
+              value={field('expiry_date')}
               onChange={() => {}} // Read-only for review
             />
             <LabeledInput 
               label="IDV (₹)" 
-              value={pdfData.idv}
+              value={field('idv')}
               onChange={() => {}} // Read-only for review
             />
             <LabeledInput 
               label="NCB (%)" 
-              value={pdfData.ncb}
+              value={field('ncb')}
               onChange={() => {}} // Read-only for review
             />
             <LabeledInput 
               label="Discount (%)" 
-              value={pdfData.discount}
+              value={field('discount')}
               onChange={() => {}} // Read-only for review
             />
             <LabeledInput 
               label="Net OD (₹)" 
-              value={pdfData.net_od}
+              value={field('net_od')}
               onChange={() => {}} // Read-only for review
               hint="Own Damage"
             />
             <LabeledInput 
               label="Total OD (₹)" 
-              value={pdfData.total_od}
+              value={field('total_od')}
               onChange={() => {}} // Read-only for review
             />
             <LabeledInput 
               label="Net Premium (₹)" 
-              value={pdfData.net_premium}
+              value={field('net_premium')}
               onChange={() => {}} // Read-only for review
             />
             <LabeledInput 
               label="Total Premium (₹)" 
-              value={pdfData.total_premium}
+              value={field('total_premium')}
               onChange={() => {}} // Read-only for review
             />
           </div>
@@ -1689,19 +1935,19 @@ function PageReview({ user }: { user: {name:string; email?:string; role:"ops"|"f
         <div className="mb-6">
           <div className="text-sm font-medium mb-2">Issues & Warnings</div>
           <div className="space-y-2">
-            {pdfData.confidence_score < 0.8 && (
+            {(field('confidence_score', 0)) < 0.8 && (
               <div className="flex items-center gap-2 text-sm text-amber-700 bg-amber-50 p-2 rounded-lg">
                 <AlertTriangle className="w-4 h-4 text-amber-600"/> 
                 <span>Low confidence score. Please verify all extracted data.</span>
               </div>
             )}
-            {!pdfData.issue_date && (
+            {!field('issue_date') && (
               <div className="flex items-center gap-2 text-sm text-amber-700 bg-amber-50 p-2 rounded-lg">
                 <AlertTriangle className="w-4 h-4 text-amber-600"/> 
                 <span>Issue Date missing. Please add manually.</span>
               </div>
             )}
-            {!pdfData.expiry_date && (
+            {!field('expiry_date') && (
               <div className="flex items-center gap-2 text-sm text-amber-700 bg-amber-50 p-2 rounded-lg">
                 <AlertTriangle className="w-4 h-4 text-amber-600"/> 
                 <span>Expiry Date missing. Please add manually.</span>
@@ -1719,7 +1965,7 @@ function PageReview({ user }: { user: {name:string; email?:string; role:"ops"|"f
                 <span>Mobile number missing. Please add manually.</span>
               </div>
             )}
-            {pdfData.confidence_score >= 0.8 && manualExtras.executive && manualExtras.mobile && (
+            {(field('confidence_score', 0)) >= 0.8 && manualExtras.executive && manualExtras.mobile && (
               <div className="flex items-center gap-2 text-sm text-green-700 bg-green-50 p-2 rounded-lg">
                 <CheckCircle2 className="w-4 h-4 text-green-600"/> 
                 <span>Data looks good! High confidence extraction + complete manual extras.</span>
@@ -2149,7 +2395,14 @@ export default function NicsanCRMMock() {
   const [opsPage, setOpsPage] = useState("upload");
   const [founderPage, setFounderPage] = useState("overview");
 
-  if (!user) return <LoginPage onLogin={(u)=>{ setUser(u); setTab(u.role==='founder'?'founder':'ops')}}/>
+  console.log('🔍 App render - user:', user, 'tab:', tab);
+
+  if (!user) return <LoginPage onLogin={(u)=>{ 
+    console.log('🔍 onLogin called with user:', u);
+    setUser(u); 
+    setTab(u.role==='founder'?'founder':'ops');
+    console.log('🔍 User state updated, tab set to:', u.role==='founder'?'founder':'ops');
+  }}/>
 
   return (
     <div className="min-h-screen bg-zinc-50">
@@ -2157,7 +2410,11 @@ export default function NicsanCRMMock() {
       {tab === "ops" ? (
         <Shell sidebar={<OpsSidebar page={opsPage} setPage={setOpsPage} />}>
           {opsPage === "upload" && <PageUpload/>}
-          {opsPage === "review" && <PageReview user={user}/>}
+          {opsPage === "review" && (
+            <ErrorBoundary>
+              <PageReview user={user}/>
+            </ErrorBoundary>
+          )}
           {opsPage === "manual-form" && <PageManualForm/>}
           {opsPage === "manual-grid" && <PageManualGrid/>}
           {opsPage === "policy-detail" && <PagePolicyDetail/>}

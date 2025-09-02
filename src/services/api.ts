@@ -1,7 +1,7 @@
 // API Service Layer for Nicsan CRM
 // Handles all communication with the backend
 
-const API_BASE_URL = 'http://localhost:3001/api';
+const API_BASE = '/api';
 
 // Types for API responses
 export interface ApiResponse<T = any> {
@@ -77,36 +77,66 @@ export interface DashboardMetrics {
   total_uploads: number;
 }
 
-// Utility function for API calls
-async function apiCall<T>(
-  endpoint: string,
-  options: RequestInit = {}
-): Promise<ApiResponse<T>> {
+type HttpMethod = 'GET' | 'POST' | 'PUT' | 'DELETE';
+
+type ApiOpts = {
+  query?: Record<string, string | number | boolean | (string | number | boolean)[] | undefined>;
+  body?: any;
+  headers?: Record<string, string>;
+};
+
+export async function apiCall(method: HttpMethod, path: string, opts: ApiOpts = {}) {
+  const { query, body, headers } = opts;
+
+  // build query string safely (supports arrays)
+  const qs = query
+    ? '?' +
+      new URLSearchParams(
+        Object.entries(query)
+          .flatMap(([k, v]) => {
+            if (v === undefined || v === null) return [];
+            return Array.isArray(v) ? v.map(iv => [k, String(iv)]) : [[k, String(v)]];
+          })
+      ).toString()
+    : '';
+
+  // ✅ CORRECT: /api + path (NOT /api + method + path)
+  const url = `${API_BASE}${path}${qs}`;
+
+  const token = localStorage.getItem('authToken');
+
+  const res = await fetch(url, {
+    method,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token && { Authorization: `Bearer ${token}` }),
+      ...(headers || {}),
+    },
+    body: method === 'GET' ? undefined : JSON.stringify(body ?? {}),
+  });
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(text || res.statusText);
+  }
+
+  // allow empty JSON
   try {
-    const token = localStorage.getItem('authToken');
-    
-    const response = await fetch(`${API_BASE_URL}${endpoint}`, {
-      headers: {
-        'Content-Type': 'application/json',
-        ...(token && { Authorization: `Bearer ${token}` }),
-        ...options.headers,
-      },
-      ...options,
-    });
-
-    const data = await response.json();
-
-    if (!response.ok) {
-      throw new Error(data.error || `HTTP ${response.status}: ${response.statusText}`);
+    const data = await res.json();
+    // Convert backend response format {ok: true, data: {...}} to frontend format {success: true, data: {...}}
+    if (data && typeof data === 'object') {
+      if ('ok' in data) {
+        return {
+          success: data.ok,
+          data: data.data,
+          error: data.error,
+          message: data.message
+        };
+      }
     }
-
     return data;
-  } catch (error) {
-    console.error(`API Error (${endpoint}):`, error);
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : 'Unknown error occurred',
-    };
+  } catch {
+    return undefined;
   }
 }
 
@@ -155,29 +185,26 @@ export const buildConfirmPayload = (form: any) => ({
 export const authAPI = {
   login: async (credentials: LoginRequest): Promise<ApiResponse<LoginResponse>> => {
     console.log('🔍 Debug: Login API called with:', credentials);
-    const response = await apiCall<LoginResponse>('/auth/login', {
-      method: 'POST',
-      body: JSON.stringify(credentials),
+    const response = await apiCall('POST', '/auth/login', {
+      body: credentials,
     });
     console.log('🔍 Debug: Login API response:', response);
     return response;
   },
 
   register: async (userData: any): Promise<ApiResponse<any>> => {
-    return apiCall('/auth/register', {
-      method: 'POST',
-      body: JSON.stringify(userData),
+    return apiCall('POST', '/auth/register', {
+      body: userData,
     });
   },
 
   getProfile: async (): Promise<ApiResponse<any>> => {
-    return apiCall('/auth/profile');
+    return apiCall('GET', '/auth/profile');
   },
 
   changePassword: async (passwordData: any): Promise<ApiResponse<any>> => {
-    return apiCall('/auth/change-password', {
-      method: 'PUT',
-      body: JSON.stringify(passwordData),
+    return apiCall('PUT', '/auth/change-password', {
+      body: passwordData,
     });
   },
 };
@@ -185,49 +212,45 @@ export const authAPI = {
 // Policies API
 export const policiesAPI = {
   getAll: async (page = 1, limit = 50, filters?: any): Promise<ApiResponse<{ policies: Policy[]; total: number }>> => {
-    const params = new URLSearchParams({
-      page: page.toString(),
-      limit: limit.toString(),
-      ...(filters && { filters: JSON.stringify(filters) }),
+    return apiCall('GET', '/policies', {
+      query: {
+        page,
+        limit,
+        ...(filters && { filters: JSON.stringify(filters) }),
+      },
     });
-    return apiCall(`/policies?${params}`);
   },
 
   getById: async (id: string): Promise<ApiResponse<Policy>> => {
-    return apiCall(`/policies/${id}`);
+    return apiCall('GET', `/policies/${id}`);
   },
 
   create: async (policy: PolicyCreateRequest): Promise<ApiResponse<Policy>> => {
-    return apiCall('/policies', {
-      method: 'POST',
-      body: JSON.stringify(policy),
+    return apiCall('POST', '/policies', {
+      body: policy,
     });
   },
 
   update: async (id: string, policy: Partial<PolicyCreateRequest>): Promise<ApiResponse<Policy>> => {
-    return apiCall(`/policies/${id}`, {
-      method: 'PUT',
-      body: JSON.stringify(policy),
+    return apiCall('PUT', `/policies/${id}`, {
+      body: policy,
     });
   },
 
   delete: async (id: string): Promise<ApiResponse<any>> => {
-    return apiCall(`/policies/${id}`, {
-      method: 'DELETE',
-    });
+    return apiCall('DELETE', `/policies/${id}`);
   },
 
   bulkCreate: async (policies: PolicyCreateRequest[]): Promise<ApiResponse<any>> => {
-    return apiCall('/policies/bulk', {
-      method: 'POST',
-      body: JSON.stringify({ policies }),
+    return apiCall('POST', '/policies/bulk', {
+      body: { policies },
     });
   },
 
   getRecent: async (limit = 6): Promise<ApiResponse<any[]>> => {
-    const r = await fetch(`${API_BASE_URL}/policies/recent?limit=${limit}`, { credentials: 'include' });
-    if (!r.ok) throw new Error('RECENT_FETCH_FAILED');
-    return r.json(); // { ok, data }
+    return apiCall('GET', '/policies/recent', {
+      query: { limit },
+    });
   },
 };
 
@@ -240,7 +263,8 @@ export const uploadAPI = {
         throw new Error('No authentication token found');
       }
 
-      const response = await fetch(`${API_BASE_URL}/upload/pdf`, {
+      // Use fetch directly for FormData since apiCall doesn't handle it well
+      const response = await fetch(`${API_BASE}/upload/pdf/file`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -269,96 +293,55 @@ export const uploadAPI = {
     }
   },
 
-  getUploads: async (page = 1, limit = 50): Promise<ApiResponse<{ uploads: PDFUpload[]; total: number }>> => {
-    const params = new URLSearchParams({
-      page: page.toString(),
-      limit: limit.toString(),
-    });
-    return apiCall(`/upload/pdf?${params}`);
+  getUploads: async (page = 1, limit = 50, statuses?: string[]): Promise<PDFUpload[]> => {
+    try {
+      const resp = await apiCall('GET', '/upload/pdf', {
+        query: {
+          page,
+          limit,
+          ...(statuses?.length && { status: statuses }), // array ok; apiCall builds repeated ?status=A&status=B
+        },
+      });
+      // always coerce to array
+      return Array.isArray(resp?.items) ? resp.items : [];
+    } catch (e) {
+      console.warn('getUploads failed, returning []', e);
+      return []; // never bubble error to UI
+    }
   },
 
   getUploadById: async (uploadId: string): Promise<ApiResponse<PDFUpload>> => {
-    try {
-      const token = localStorage.getItem('authToken');
-      if (!token) {
-        throw new Error('No authentication token found');
+    return apiCall('GET', `/upload/pdf/${uploadId}`);
+  },
+
+  getReview: async (uploadId: string): Promise<ApiResponse<any>> => {
+    return apiCall('GET', `/uploads/${uploadId}/review`);
+  },
+
+  // Create minimal upload record
+  createUpload: async (filename: string, s3_key?: string, insurer?: string): Promise<ApiResponse<PDFUpload>> => {
+    return apiCall('POST', '/upload/pdf', {
+      body: {
+        filename,
+        s3_key: s3_key || null,
+        insurer: insurer || null
       }
-
-      const response = await fetch(`${API_BASE_URL}/upload/${uploadId}`, {
-        method: 'GET',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
-      }
-
-      const data = await response.json();
-      return {
-        success: true,
-        data: data.data || data,
-        message: data.message || 'Upload details retrieved successfully'
-      };
-    } catch (error) {
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Failed to get upload details',
-        message: 'Retrieval failed'
-      };
-    }
+    });
   },
 
   getUploadStatus: async (s3Key: string): Promise<ApiResponse<PDFUpload>> => {
-    try {
-      const token = localStorage.getItem('authToken');
-      if (!token) {
-        throw new Error('No authentication token found');
-      }
-
-      const response = await fetch(`${API_BASE_URL}/upload/internal/by-s3key/${encodeURIComponent(s3Key)}`, {
-        method: 'GET',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
-      }
-
-      const data = await response.json();
-      return {
-        success: true,
-        data: data.data || data,
-        message: data.message || 'Upload status retrieved successfully'
-      };
-    } catch (error) {
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Failed to get upload status',
-        message: 'Status retrieval failed'
-      };
-    }
+    return apiCall('GET', `/upload/internal/by-s3key/${encodeURIComponent(s3Key)}`);
   },
 
   retryProcessing: async (id: string): Promise<ApiResponse<any>> => {
-    return apiCall(`/upload/pdf/${id}/retry`, {
-      method: 'POST',
-    });
+    return apiCall('POST', `/upload/pdf/${id}/retry`);
   },
 
   confirmAndSave: async (uploadId: string, form: any): Promise<ApiResponse<any>> => {
     const payload = buildConfirmPayload(form);
     console.debug('🔧 confirm-save payload', payload);
-    return apiCall(`/uploads/${uploadId}/confirm-save`, {
-      method: 'POST',
-      body: JSON.stringify(payload),
+    return apiCall('POST', `/uploads/${uploadId}/confirm-save`, {
+      body: payload,
     });
   },
 };
@@ -366,51 +349,50 @@ export const uploadAPI = {
 // Dashboard API
 export const dashboardAPI = {
   getMetrics: async (): Promise<ApiResponse<DashboardMetrics>> => {
-    return apiCall('/dashboard/metrics');
+    return apiCall('GET', '/dashboard/metrics');
   },
 
   getSalesReps: async (): Promise<ApiResponse<any[]>> => {
-    return apiCall('/dashboard/sales-reps');
+    return apiCall('GET', '/dashboard/sales-reps');
   },
 
   getTrends: async (period = 'month'): Promise<ApiResponse<any[]>> => {
-    return apiCall(`/dashboard/trends?period=${period}`);
+    return apiCall('GET', '/dashboard/trends', {
+      query: { period },
+    });
   },
 
   getDataSources: async (): Promise<ApiResponse<any[]>> => {
-    return apiCall('/dashboard/data-sources');
+    return apiCall('GET', '/dashboard/data-sources');
   },
 
   getVehicleAnalysis: async (): Promise<ApiResponse<any[]>> => {
-    return apiCall('/dashboard/vehicle-analysis');
+    return apiCall('GET', '/dashboard/vehicle-analysis');
   },
 
   getKPIs: async (): Promise<ApiResponse<any>> => {
-    return apiCall('/dashboard/kpis');
+    return apiCall('GET', '/dashboard/kpis');
   },
 };
 
 // Users API
 export const usersAPI = {
   getAll: async (): Promise<ApiResponse<any[]>> => {
-    return apiCall('/users');
+    return apiCall('GET', '/users');
   },
 
   getById: async (id: string): Promise<ApiResponse<any>> => {
-    return apiCall(`/users/${id}`);
+    return apiCall('GET', `/users/${id}`);
   },
 
   update: async (id: string, userData: any): Promise<ApiResponse<any>> => {
-    return apiCall(`/users/${id}`, {
-      method: 'PUT',
-      body: JSON.stringify(userData),
+    return apiCall('PUT', `/users/${id}`, {
+      body: userData,
     });
   },
 
   delete: async (id: string): Promise<ApiResponse<any>> => {
-    return apiCall(`/users/${id}`, {
-      method: 'DELETE',
-    });
+    return apiCall('DELETE', `/users/${id}`);
   },
 };
 

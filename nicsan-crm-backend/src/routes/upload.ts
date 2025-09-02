@@ -59,8 +59,37 @@ router.post('/presigned-url', async (req: AuthenticatedRequest, res, next) => {
   }
 });
 
-// Upload PDF
-router.post('/pdf', upload.single('pdf'), async (req: AuthenticatedRequest, res, next) => {
+// Minimal upload insert route
+router.post('/pdf', authenticateToken, async (req: AuthenticatedRequest, res, next) => {
+  try {
+    const userId = req.user?.userId;
+    if (!userId) {
+      return next(createError('User not authenticated', 401));
+    }
+
+    const { filename, s3_key = null, insurer = null } = req.body;
+
+    if (!filename) {
+      return res.status(400).json({ ok: false, error: 'filename is required' });
+    }
+
+    const q = `
+      INSERT INTO pdf_uploads (filename, original_name, s3_key, s3_url, file_size, mime_type, status, uploaded_by)
+      VALUES ($1, $1, $2, $3, 0, 'application/pdf', 'UPLOADED', $4)
+      RETURNING id::text AS id, filename, status, s3_key, created_at;
+    `;
+
+    const s3_url = s3_key ? `https://bucket.s3.amazonaws.com/${s3_key}` : null;
+    const { rows } = await pool.query(q, [filename, s3_key, s3_url, userId]);
+    return res.json({ ok: true, data: rows[0] });
+  } catch (err) {
+    console.error('upload insert failed:', err);
+    return res.status(500).json({ ok: false, error: 'UPLOAD_INSERT_FAILED' });
+  }
+});
+
+// Upload PDF (file upload)
+router.post('/pdf/file', upload.single('pdf'), async (req: AuthenticatedRequest, res, next) => {
   try {
     const userId = req.user?.userId;
     if (!userId) {
@@ -471,6 +500,69 @@ router.get('/pdf/:id', async (req: AuthenticatedRequest, res, next) => {
 // Detailed job status endpoint removed
 
 // Get all uploads for user
+// GET /pdf - list uploads with pagination
+router.get('/pdf', async (req, res) => {
+  const page  = Math.max(1, Number(req.query.page)  || 1);
+  const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 50));
+  const offset = (page - 1) * limit;
+
+  try {
+    // ✅ Query for the total count
+    const countResult = await pool.query(
+      `SELECT COUNT(*)::int AS total FROM pdf_uploads`
+    );
+
+    // ✅ Query for the rows
+    const { rows } = await pool.query(
+      `SELECT id, filename, status, created_at
+       FROM pdf_uploads
+       ORDER BY created_at DESC
+       LIMIT $1 OFFSET $2`,
+      [limit, offset]
+    );
+
+    res.json({
+      ok: true,
+      data: { 
+        items: rows, 
+        total: countResult.rows[0].total, 
+        page, 
+        limit 
+      },
+    });
+  } catch (err) {
+    console.error("UPLOAD_LIST_FAILED", err);
+    res.status(500).json({ ok: false, error: "UPLOAD_LIST_FAILED" });
+  }
+});
+
+// GET /upload/pdf/:id - fetch single upload by id
+router.get('/pdf/:id', async (req, res) => {
+  try {
+    const { getUploadByIdOrUuid } = await import('../../src/db/uploads');
+    const u = await getUploadByIdOrUuid(req.params.id, pool);
+    if (!u) return res.status(404).json({ ok: false, error: 'UPLOAD_NOT_FOUND' });
+
+    // always respond with UUID as "id"
+    return res.json({
+      ok: true,
+      data: {
+        id: u.uuid_text,
+        filename: u.filename,
+        status: u.status,
+        insurer: u.insurer,
+        s3_key: u.s3_key,
+        extracted_data: u.extracted_data ?? null,
+        has_extracted_data: !!u.has_extracted_data,
+        created_at: u.created_at
+      }
+    });
+  } catch (e: any) {
+    console.error('GET /upload/pdf/:id error:', e?.message);
+    return res.status(500).json({ ok: false, error: 'UPLOAD_FETCH_FAILED' });
+  }
+});
+
 router.get('/', async (req: AuthenticatedRequest, res, next) => {
   try {
     const userId = req.user?.userId;

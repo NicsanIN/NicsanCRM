@@ -8,6 +8,7 @@ import authRoutes from './routes/auth';
 import policyRoutes from './routes/policies';
 import userRoutes from './routes/users';
 import uploadRoutes from './routes/upload';
+import uploadsRoutes from './routes/uploads';
 import dashboardRoutes from './routes/dashboard';
 import settingsRoutes from './routes/settings';
 import reviewRoutes from './routes/review';
@@ -62,6 +63,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/policies', policyRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/upload', uploadRoutes);
+app.use('/api', uploadsRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/settings', settingsRoutes);
 app.use('/api', reviewRoutes);
@@ -70,8 +72,8 @@ app.use('/api', reviewRoutes);
 app.use(notFoundHandler);
 app.use(errorHandler);
 
-// Start server (bind to 0.0.0.0 for containers)
-app.listen(PORT, '0.0.0.0', () => {
+// Start server (bind to 127.0.0.1 for local development)
+app.listen(PORT, '127.0.0.1', () => {
   console.log(`🚀 Nicsan CRM Backend running on port ${PORT}`);
   console.log(`📊 Environment: ${process.env.NODE_ENV || 'development'}`);
   console.log(`🔗 Health check (ALB): http://localhost:${PORT}/healthz`);
