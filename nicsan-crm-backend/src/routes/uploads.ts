@@ -18,7 +18,7 @@ router.get('/upload/pdf', async (req, res) => {
 
     const { rows } = await pool.query(
       `
-      SELECT upload_uuid::text AS id, filename, status, insurer, s3_key, created_at
+      SELECT id::text AS id, filename, status, s3_key, created_at
       FROM pdf_uploads
       WHERE status = ANY($1::text[])
       ORDER BY created_at DESC

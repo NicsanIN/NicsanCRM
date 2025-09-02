@@ -12,6 +12,8 @@ import uploadsRoutes from './routes/uploads';
 import dashboardRoutes from './routes/dashboard';
 import settingsRoutes from './routes/settings';
 import reviewRoutes from './routes/review';
+import pool, { testDatabaseConnection } from './config/database';
+import { setupShutdownHandlers, shutdown } from './utils/shutdown';
 
 
 // Load environment variables
@@ -49,13 +51,30 @@ app.get('/healthz', (req, res) => {
 });
 
 // Keep your original detailed health for manual checks
-app.get('/health', (req, res) => {
-  res.status(200).json({
-    status: 'OK',
-    timestamp: new Date().toISOString(),
-    service: 'Nicsan CRM Backend',
-    version: '1.0.0',
-  });
+app.get('/health', async (req, res) => {
+  try {
+    // Test database connectivity
+    const dbTest = await pool.query('SELECT 1 as test');
+    const dbStatus = dbTest.rows[0]?.test === 1 ? 'connected' : 'disconnected';
+    
+    res.status(200).json({
+      status: 'OK',
+      timestamp: new Date().toISOString(),
+      service: 'Nicsan CRM Backend',
+      version: '1.0.0',
+      database: dbStatus,
+      environment: process.env.NODE_ENV || 'development',
+    });
+  } catch (error) {
+    res.status(503).json({
+      status: 'ERROR',
+      timestamp: new Date().toISOString(),
+      service: 'Nicsan CRM Backend',
+      version: '1.0.0',
+      database: 'disconnected',
+      error: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
 });
 
 // API Routes
@@ -68,16 +87,49 @@ app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/settings', settingsRoutes);
 app.use('/api', reviewRoutes);
 
+console.log('🧭 Routes mounted: /api/auth/*, /api/policies/*, /api/users/*, /api/upload/*, /api/uploads/*, /api/dashboard/*, /api/settings/*, /api/uploads/*/confirm-save');
+
 // Error handling middleware
 app.use(notFoundHandler);
 app.use(errorHandler);
 
-// Start server (bind to 127.0.0.1 for local development)
-app.listen(PORT, '127.0.0.1', () => {
-  console.log(`🚀 Nicsan CRM Backend running on port ${PORT}`);
-  console.log(`📊 Environment: ${process.env.NODE_ENV || 'development'}`);
-  console.log(`🔗 Health check (ALB): http://localhost:${PORT}/healthz`);
-  console.log(`🔗 Health check (verbose): http://localhost:${PORT}/health`);
+// Main startup function
+async function main() {
+  try {
+    console.log('🚀 Starting backend...');
+    
+    // Set up shutdown handlers first
+    setupShutdownHandlers();
+    
+    // Test database connection
+    const dbConnected = await testDatabaseConnection();
+    if (!dbConnected) {
+      throw new Error('Database connection failed');
+    }
+    
+    // Start the server
+    const server = app.listen(PORT, '127.0.0.1', () => {
+      console.log('✅ Server listening on port', PORT);
+      console.log(`📊 Environment: ${process.env.NODE_ENV || 'development'}`);
+      console.log(`🔗 Health check (ALB): http://localhost:${PORT}/healthz`);
+      console.log(`🔗 Health check (verbose): http://localhost:${PORT}/health`);
+    });
+    
+    // Store server reference for graceful shutdown
+    (global as any).__server = server;
+    
+    console.log('🎉 Backend startup completed successfully');
+    
+  } catch (error) {
+    console.error('💥 Backend startup failed:', error);
+    await shutdown('boot-failed', error);
+  }
+}
+
+// Start the application
+main().catch(err => {
+  console.error('💥 Unhandled error in main():', err);
+  shutdown('main-unhandled', err);
 });
 
 export default app;

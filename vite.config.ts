@@ -5,9 +5,11 @@ import react from '@vitejs/plugin-react'
 export default defineConfig({
   plugins: [react()],
   server: {
+    port: parseInt(process.env.VITE_PORT || '5173'),
+    strictPort: process.env.NODE_ENV === 'production', // Only strict in prod
     proxy: {
       '/api': {
-        target: 'http://localhost:3001',
+        target: process.env.VITE_API_BASE || 'http://localhost:3001',
         changeOrigin: true,
         secure: false,
       },

@@ -30,16 +30,12 @@ function LoginPage({ onLogin }: { onLogin: (user: { name: string; email: string;
       // Use real authentication API
       const response = await authAPI.login({ email, password });
       
-      console.log('🔍 Full login response:', response);
-      console.log('🔍 Response data:', response.data);
-      console.log('🔍 Token:', response.data?.token);
-      console.log('🔍 User:', response.data?.user);
+
       
       if (response.success && response.data) {
         const { token, user: userData } = response.data;
         
-        console.log('🔍 Extracted token:', token);
-        console.log('🔍 Extracted user:', userData);
+
         
         if (!token) {
           setError('No token received from server');
@@ -47,25 +43,16 @@ function LoginPage({ onLogin }: { onLogin: (user: { name: string; email: string;
         }
         
         // Store token and user data
-        console.log('🔍 About to store token...');
-        
         try {
-          // Try authUtils first
-          console.log('🔍 Calling authUtils.setToken...');
           authUtils.setToken(token);
-          console.log('🔍 authUtils.setToken completed');
         } catch (error) {
-          console.error('🔍 authUtils.setToken failed:', error);
+          console.error('Token storage failed:', error);
         }
         
         try {
-          // Also store directly to verify
-          console.log('🔍 Storing directly to localStorage...');
           localStorage.setItem('authToken', token);
-          console.log('🔍 Direct localStorage storage completed');
-          console.log('🔍 Verification - token in localStorage:', !!localStorage.getItem('authToken'));
         } catch (error) {
-          console.error('🔍 Direct localStorage storage failed:', error);
+          console.error('LocalStorage storage failed:', error);
         }
         
         // Call onLogin with real user data
@@ -74,9 +61,7 @@ function LoginPage({ onLogin }: { onLogin: (user: { name: string; email: string;
           email: userData?.email || email, 
           role: userData?.role || 'ops' 
         };
-        console.log('🔍 Calling onLogin with:', userInfo);
         onLogin(userInfo);
-        console.log('🔍 onLogin completed');
       } else {
         setError(response.error || 'Login failed');
       }
@@ -284,7 +269,7 @@ function PageUpload() {
           
           // Use server data as the primary record
           const serverItem = serverResp.data;
-          const newFile = {
+        const newFile = {
             id: serverItem.id,
             filename: serverItem.filename,
             status: serverItem.upload_status || 'UPLOADED',
@@ -328,7 +313,7 @@ function PageUpload() {
           // Save to localStorage so Review page can access it
           const allUploads = [newFile, ...uploadedFiles];
           localStorage.setItem('nicsan_crm_uploads', JSON.stringify(allUploads));
-          console.log('💾 Saved uploads to localStorage:', allUploads);
+
           
           // Start polling for status updates
           pollUploadStatus(serverItem.id);
@@ -340,51 +325,51 @@ function PageUpload() {
           setTimeout(() => setToast(null), 5000);
           const newFile = {
             id: result.data?.id || Date.now(),
-            filename: file.name,
-            status: 'UPLOADED',
-            insurer: selectedInsurer,
+          filename: file.name,
+          status: 'UPLOADED',
+          insurer: selectedInsurer,
             s3_key: s3Key,
-            time: new Date().toLocaleTimeString(),
-            size: (file.size / 1024 / 1024).toFixed(2) + ' MB',
-            // Structure that matches Review page expectations
+          time: new Date().toLocaleTimeString(),
+          size: (file.size / 1024 / 1024).toFixed(2) + ' MB',
+          // Structure that matches Review page expectations
+          extracted_data: {
+            insurer: selectedInsurer,
+            status: 'UPLOADED',
+            manual_extras: { ...manualExtras },
             extracted_data: {
-              insurer: selectedInsurer,
-              status: 'UPLOADED',
-              manual_extras: { ...manualExtras },
-              extracted_data: {
                 // Mock PDF data for demo (in real app, this comes from your extractor)
-                policy_number: "TA-" + Math.floor(Math.random() * 10000),
-                vehicle_number: "KA01AB" + Math.floor(Math.random() * 1000),
-                insurer: selectedInsurer === 'TATA_AIG' ? 'Tata AIG' : 'Digit',
-                product_type: "Private Car",
-                vehicle_type: "Private Car",
-                make: "Maruti",
-                model: "Swift",
-                cc: "1197",
-                manufacturing_year: "2021",
-                issue_date: new Date().toISOString().split('T')[0],
-                expiry_date: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-                idv: 495000,
-                ncb: 20,
-                discount: 0,
-                net_od: 5400,
-                ref: "",
-                total_od: 7200,
-                net_premium: 10800,
-                total_premium: 12150,
-                confidence_score: 0.86
-              }
+              policy_number: "TA-" + Math.floor(Math.random() * 10000),
+              vehicle_number: "KA01AB" + Math.floor(Math.random() * 1000),
+              insurer: selectedInsurer === 'TATA_AIG' ? 'Tata AIG' : 'Digit',
+              product_type: "Private Car",
+              vehicle_type: "Private Car",
+              make: "Maruti",
+              model: "Swift",
+              cc: "1197",
+              manufacturing_year: "2021",
+              issue_date: new Date().toISOString().split('T')[0],
+              expiry_date: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+              idv: 495000,
+              ncb: 20,
+              discount: 0,
+              net_od: 5400,
+              ref: "",
+              total_od: 7200,
+              net_premium: 10800,
+              total_premium: 12150,
+              confidence_score: 0.86
             }
-          };
-          
-          setUploadedFiles(prev => [newFile, ...prev]);
-          
-          // Save to localStorage so Review page can access it
-          const allUploads = [newFile, ...uploadedFiles];
-          localStorage.setItem('nicsan_crm_uploads', JSON.stringify(allUploads));
-          console.log('💾 Saved uploads to localStorage (fallback):', allUploads);
-          
-          // Start polling for status updates
+          }
+        };
+        
+        setUploadedFiles(prev => [newFile, ...prev]);
+        
+        // Save to localStorage so Review page can access it
+        const allUploads = [newFile, ...uploadedFiles];
+        localStorage.setItem('nicsan_crm_uploads', JSON.stringify(allUploads));
+
+        
+        // Start polling for status updates
           if (result.data?.id) {
             pollUploadStatus(result.data.id);
           }
@@ -438,7 +423,7 @@ function PageUpload() {
             
             // Update localStorage with new status
             localStorage.setItem('nicsan_crm_uploads', JSON.stringify(updated));
-            console.log('🔄 Updated upload status in localStorage:', updated);
+
             
             return updated;
           });
@@ -971,9 +956,9 @@ function PageManualForm() {
       };
 
       // Submit to API
-      console.log('🔍 Submitting policy data:', policyData);
+
       const response = await policiesAPI.create(policyData);
-      console.log('🔍 API response:', response);
+
       
       if (response.success) {
         setSubmitMessage({ 
@@ -1198,7 +1183,7 @@ function PageManualGrid() {
 }
 
 // NicsanCRMMock.tsx (top of component)
-const LS_KEY = 'nicsan.uploads';
+const LS_KEY = 'nicsan_crm_uploads';
 
 type UploadRow = {
   id: string;
@@ -1243,10 +1228,13 @@ function PageReview({ user }: { user: {name:string; email?:string; role:"ops"|"f
   const didInit = React.useRef(false);
 
   const refreshUploads = React.useCallback(async () => {
+    console.log('🔄 refreshUploads called');
     setIsLoading(true);
     try {
+      console.log('🔄 Calling uploadAPI.getUploads...');
       const resp = await uploadAPI.getUploads(1, 50, ['UPLOADED','PROCESSING','REVIEW','COMPLETED']);
-      if (Array.isArray(resp)) {
+      console.log('🔄 uploadAPI.getUploads response:', resp);
+      if (Array.isArray(resp) && resp.length > 0) {
         // Merge server uploads with local uploads, avoiding duplicates
         const localUploads = loadUploadsFromLS();
         const serverIds = new Set(resp.map(u => u.id));
@@ -1256,8 +1244,12 @@ function PageReview({ user }: { user: {name:string; email?:string; role:"ops"|"f
         setUploads(mergedUploads);
         saveUploadsToLS(mergedUploads);
       } else {
-        // keep showing previous uploads if API failed
-        console.warn('getUploads failed, keeping cached list', resp);
+        // If no server uploads, just use local uploads
+        const localUploads = loadUploadsFromLS();
+        if (localUploads.length > 0) {
+          setUploads(localUploads);
+        }
+        console.warn('No server uploads found, using local uploads only', resp);
       }
     } catch (e) {
       console.warn('getUploads error, keeping cached list', e);
@@ -1328,8 +1320,8 @@ function PageReview({ user }: { user: {name:string; email?:string; role:"ops"|"f
         setReviewData({ extracted_data: review.extracted_data ?? {} });
         setPdfData(review.extracted_data ?? {});
         setUploadId(review.id);
-        setSubmitMessage({ 
-          type: 'success', 
+      setSubmitMessage({ 
+        type: 'success', 
           message: 'Server upload data loaded successfully! Please review before saving.' 
         });
         return;
@@ -1420,9 +1412,9 @@ function PageReview({ user }: { user: {name:string; email?:string; role:"ops"|"f
         
         // Remove from available list and clear review view
         setUploads(prev => prev.filter(u => u.id !== uploadId));
-        setTimeout(() => {
-          setReviewData(null);
-          setSaveMessage(null);
+      setTimeout(() => {
+        setReviewData(null);
+        setSaveMessage(null);
         }, 800);
       } else {
         setSubmitMessage({ type: 'error', message: resp.error || 'Save failed' });
@@ -1558,16 +1550,17 @@ function PageReview({ user }: { user: {name:string; email?:string; role:"ops"|"f
             <div className="text-sm font-medium">📄 Select Upload to Review</div>
             <button 
               onClick={() => {
+                console.log('🔄 Refresh button clicked');
                 // Force reload available uploads from localStorage
                 const loadAvailableUploads = async () => {
                   try {
                     const storedUploads = localStorage.getItem('nicsan_crm_uploads');
                     if (storedUploads) {
                       const realUploads = JSON.parse(storedUploads);
-                      console.log('🔄 Refreshed uploads from localStorage:', realUploads);
+
                       setUploads(realUploads);
                     } else {
-                      console.log('📋 No uploads found in localStorage');
+
                     }
                   } catch (error) {
                     console.error('Failed to refresh uploads:', error);
@@ -1581,7 +1574,7 @@ function PageReview({ user }: { user: {name:string; email?:string; role:"ops"|"f
             </button>
           </div>
           <div className="flex items-center gap-3">
-                        <select
+            <select 
               className="w-full px-3 py-2 border rounded-lg text-sm"
               value={selectedKey}
               onChange={(e) => {
@@ -1628,8 +1621,8 @@ function PageReview({ user }: { user: {name:string; email?:string; role:"ops"|"f
                   {uploads.map(u => (
                     <option key={`upload:${u.id}`} value={`upload:${u.id}`}>
                       {u.filename} - {u.status || u.upload_status || 'UNKNOWN'}
-                    </option>
-                  ))}
+                </option>
+              ))}
                 </optgroup>
               )}
 
@@ -1702,7 +1695,7 @@ function PageReview({ user }: { user: {name:string; email?:string; role:"ops"|"f
       );
     }
   }
-
+  
   // Safety check - if no data, show error
   if (!reviewData) {
     return (
@@ -2395,13 +2388,11 @@ export default function NicsanCRMMock() {
   const [opsPage, setOpsPage] = useState("upload");
   const [founderPage, setFounderPage] = useState("overview");
 
-  console.log('🔍 App render - user:', user, 'tab:', tab);
+
 
   if (!user) return <LoginPage onLogin={(u)=>{ 
-    console.log('🔍 onLogin called with user:', u);
     setUser(u); 
     setTab(u.role==='founder'?'founder':'ops');
-    console.log('🔍 User state updated, tab set to:', u.role==='founder'?'founder':'ops');
   }}/>
 
   return (

@@ -29,11 +29,22 @@ pool.on('error', (err) => {
   // Do not exit; allow the server to run for non-DB routes and retry later
 });
 
-// Graceful shutdown
-process.on('SIGINT', async () => {
-  console.log('🔄 Shutting down database connections...');
-  await pool.end();
-  process.exit(0);
-});
+// Note: Shutdown handling is now managed by src/utils/shutdown.ts
+// This prevents duplicate signal handlers
+
+// Database connectivity test
+export async function testDatabaseConnection(): Promise<boolean> {
+  try {
+    console.log('🧪 Testing database connection...');
+    const { rows } = await pool.query('SELECT 1 as ok');
+    const isConnected = rows[0]?.ok === 1;
+    console.log('🧪 Database connection test:', isConnected ? '✅ SUCCESS' : '❌ FAILED');
+    return isConnected;
+  } catch (error) {
+    console.error('🧪 Database connection test: ❌ FAILED');
+    console.error('🧪 Error details:', error);
+    return false;
+  }
+}
 
 export default pool;

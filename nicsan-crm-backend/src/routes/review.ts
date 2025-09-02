@@ -83,7 +83,7 @@ router.post('/uploads/:id/confirm-save', async (req: AuthenticatedRequest, res, 
     );
 
     // (optional) bump upload status → REVIEW/SAVED
-    await pool.query(`UPDATE pdf_uploads SET status='REVIEW' WHERE upload_uuid=$1 AND status <> 'REVIEW'`, [uploadUUID]);
+    await pool.query(`UPDATE pdf_uploads SET status='REVIEW' WHERE id=$1 AND status <> 'REVIEW'`, [uploadUUID]);
 
     return res.json({ ok: true, policy_id: rows[0].id, upload_id: uploadUUID });
   } catch (e: any) {

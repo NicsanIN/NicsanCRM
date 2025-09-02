@@ -184,11 +184,11 @@ export const buildConfirmPayload = (form: any) => ({
 // Authentication API
 export const authAPI = {
   login: async (credentials: LoginRequest): Promise<ApiResponse<LoginResponse>> => {
-    console.log('🔍 Debug: Login API called with:', credentials);
+
     const response = await apiCall('POST', '/auth/login', {
       body: credentials,
     });
-    console.log('🔍 Debug: Login API response:', response);
+
     return response;
   },
 
@@ -302,8 +302,19 @@ export const uploadAPI = {
           ...(statuses?.length && { status: statuses }), // array ok; apiCall builds repeated ?status=A&status=B
         },
       });
-      // always coerce to array
-      return Array.isArray(resp?.items) ? resp.items : [];
+      // Coerce various possible backend shapes to a plain array of uploads
+      // Supported shapes:
+      // - { success: true, data: { items: [...] } }
+      // - { ok: true, data: { items: [...] } }  (converted by apiCall to { success, data })
+      // - { items: [...] }
+      // - [...]
+      const maybeItems =
+        (resp as any)?.data?.items ??
+        (resp as any)?.items ??
+        (Array.isArray(resp) ? resp : undefined) ??
+        (Array.isArray((resp as any)?.data) ? (resp as any).data : undefined);
+
+      return Array.isArray(maybeItems) ? (maybeItems as PDFUpload[]) : [];
     } catch (e) {
       console.warn('getUploads failed, returning []', e);
       return []; // never bubble error to UI
@@ -408,9 +419,7 @@ export const authUtils = {
   },
 
   setToken: (token: string): void => {
-    console.log('🔍 Debug: Setting token, length:', token.length);
     localStorage.setItem('authToken', token);
-    console.log('🔍 Debug: Token stored, verifying:', !!localStorage.getItem('authToken'));
   },
 
   removeToken: (): void => {
