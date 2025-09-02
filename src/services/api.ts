@@ -127,9 +127,17 @@ const wrapField = (val: any, src: 'manual' | 'extracted' = 'manual') => {
   };
 };
 
+const normalizeInsurer = (v: any) => {
+  if (typeof v !== 'string') return v;
+  const s = v.trim().toUpperCase();
+  if (s === 'TATA AIG' || s === 'TATA_AIG') return 'TATA_AIG';
+  if (s === 'DIGIT') return 'DIGIT';
+  return v; // leave as-is; backend will validate
+};
+
 export const buildConfirmPayload = (form: any) => ({
   schema_version: '1.0',
-  insurer:        wrapField(form?.insurer),
+  insurer:        wrapField(normalizeInsurer(form?.insurer)),
   policy_number:  wrapField(form?.policy_number),
   vehicle_number: wrapField(form?.vehicle_number),
   issue_date:     wrapField(form?.issue_date),
