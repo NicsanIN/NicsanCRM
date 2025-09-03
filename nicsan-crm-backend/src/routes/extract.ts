@@ -41,7 +41,7 @@ router.post('/pdf/:uploadId', authenticateToken, async (req, res, next) => {
     console.log("[extract/route] body:", req.body);
     const model = req.body?.model === "secondary" ? "secondary" : "primary";
 
-    const { data, meta } = await extractFromPdf({ s3_key: upload.s3_key }, model);
+    const { data, meta } = await extractFromPdf({ s3_key: upload.s3_key, id: upload.id }, model);
     
     res.json({ ok: true, data, meta });
     
@@ -61,13 +61,42 @@ router.post('/pdf/:uploadId/ocr', authenticateToken, async (req, res, next) => {
 
     // OCR timing
     const tText0 = Date.now();
-    const pdfText = await ocrPdfFromS3ToText(upload.s3_key);
+    const { text: pdfText, fromCache } = await ocrPdfFromS3ToText({ uploadId, s3Key: upload.s3_key });
     const text_ms = Date.now() - tText0;
     if (!pdfText || pdfText.length < 20) return res.status(422).json({ ok:false, code:'pdf_text_empty' });
 
-    // LLM timing
+    // DEBUG: Log OCR text around "Valid From"
+    function logAround(label: RegExp, text: string, ctx = 3) {
+      const lines = text.split(/\r?\n/);
+      for (let i = 0; i < lines.length; i++) {
+        if (label.test(lines[i])) {
+          const start = Math.max(0, i - ctx);
+          const end = Math.min(lines.length, i + ctx + 1);
+          console.log('[OCR DEBUG] Valid From context:');
+          console.log(lines.slice(start, end).join("\n"));
+        }
+      }
+    }
+    logAround(/Valid\s*From/i, pdfText, 5);
+
+    // LLM timing - use window for LLM, full text for regex assist
     const tLlm0 = Date.now();
-    const data = await extractWithOpenAI({ pdfText, modelTag });
+    
+    // Make a small window for the LLM (keep current logic)
+    const windowForLlm = pdfText.length > 2000 ? pdfText.substring(0, 2000) : pdfText;
+    
+    // Call OpenAI on the window to get LLM output
+    const llmData = await extractWithOpenAI({ pdfText: windowForLlm, modelTag });
+    
+    // Apply RegexAssist on FULL text (this is the fix)
+    if (process.env.DEBUG_REGEX === "1") {
+      console.log("[assist] text length:", pdfText.length); // expect ~24000+
+    }
+    
+    // Import and use applyRegexAssist directly on full text
+    const { applyRegexAssist } = await import('../extractors/regexAssist');
+    const data = applyRegexAssist(pdfText, llmData);
+    
     const llm_ms = Date.now() - tLlm0;
 
     const meta = {
@@ -77,6 +106,7 @@ router.post('/pdf/:uploadId/ocr', authenticateToken, async (req, res, next) => {
       text_ms,
       llm_ms,
       total_ms: text_ms + llm_ms,
+      ocrCache: fromCache ? "hit" : "miss",
     };
     return res.json({ ok:true, data, meta });
   } catch (err) {

@@ -8,7 +8,7 @@ function makeUrl(path: string) {
 }
 
 export async function apiCall(path: string, opts: RequestInit = {}) {
-  const token = localStorage.getItem('token') || '';
+  const token = localStorage.getItem('authToken') || '';
   const isForm = opts.body instanceof FormData;
 
   const headers = new Headers(opts.headers || {});

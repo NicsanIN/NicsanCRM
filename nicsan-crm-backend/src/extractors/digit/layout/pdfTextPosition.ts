@@ -1,7 +1,9 @@
 /**
- * Simple PDF text extractor with coordinate information
- * This is a placeholder implementation that returns structured text data
+ * PDF text extractor with coordinate information
+ * Uses pdf-parse for real text extraction
  */
+
+import * as pdfParse from 'pdf-parse';
 
 export interface TextLine {
   text: string;
@@ -22,48 +24,54 @@ export interface PdfTextResult {
 
 /**
  * Extract text from PDF buffer with coordinate information
- * This is a placeholder implementation - in production you'd use pdf-parse or pdfjs-dist
+ * Uses pdf-parse for real text extraction
  */
 export async function getPdfTextWithCoords(
   buffer: Buffer, 
   options: { pageLimit?: number } = {}
 ): Promise<PdfTextResult> {
-  const pageLimit = options.pageLimit || 4;
-  
-  // Placeholder implementation - returns sample text structure
-  // In production, you'd parse the actual PDF buffer here
-  const pages: TextPage[] = [];
-  
-  for (let i = 0; i < Math.min(pageLimit, 1); i++) {
-    pages.push({
-      pageNumber: i + 1,
-      lines: [
-        {
-          text: `Sample PDF text from page ${i + 1} - This is a placeholder implementation.`,
-          x: 0,
-          y: 0,
-          width: 100,
-          height: 10
-        },
-        {
-          text: "Policy Number: ABC123456789",
-          x: 0,
-          y: 20,
-          width: 200,
-          height: 10
-        },
-        {
-          text: "Vehicle Number: KA01AB1234",
-          x: 0,
-          y: 40,
-          width: 200,
-          height: 10
-        }
-      ]
+  try {
+    console.log('🔍 PDF Text Extraction Debug:', {
+      bufferLength: buffer?.length,
+      bufferType: typeof buffer,
+      isBuffer: Buffer.isBuffer(buffer)
     });
+    
+    // Use pdf-parse to extract text from the PDF
+    const pdfData = await pdfParse(buffer);
+    const text = pdfData.text;
+    
+    console.log('🔍 PDF Parse Result:', {
+      textLength: text?.length,
+      textPreview: text?.substring(0, 200),
+      hasText: !!text
+    });
+    
+    // Split text into lines and create a simple structure
+    const lines = text.split('\n').filter(line => line.trim().length > 0);
+    
+    console.log('🔍 Extracted Lines:', {
+      lineCount: lines.length,
+      firstFewLines: lines.slice(0, 3)
+    });
+    
+    const pages: TextPage[] = [{
+      pageNumber: 1,
+      lines: lines.map((line, index) => ({
+        text: line.trim(),
+        x: 0,
+        y: index * 20, // Simple vertical positioning
+        width: line.length * 8, // Rough width estimate
+        height: 16
+      }))
+    }];
+    
+    return { pages };
+  } catch (error) {
+    console.error('PDF parsing error:', error);
+    // Fallback to empty result if parsing fails
+    return { pages: [] };
   }
-  
-  return { pages };
 }
 
 

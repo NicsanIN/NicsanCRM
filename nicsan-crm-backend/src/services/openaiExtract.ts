@@ -2,7 +2,7 @@ import { runOpenAIExtractFast, type ExtractResult } from "./openaiExtractCore";
 import { getPdfTextFast } from "./pdfTextExtractor";
 import type { PolicyExtractV1 } from "../extraction/schema";
 import { toInsurerHint, type InsurerHint } from "../extraction/insurerMap";
-import { applyRegexAssist } from "../../src/extractors/regexAssist";
+import { applyRegexAssist } from "../extractors/regexAssist";
 
 export type ModelTag = "primary" | "secondary";
 
@@ -114,6 +114,9 @@ export async function extractWithOpenAI(input: { pdfText: string; modelTag: 'pri
   };
 
   // 3) **Regex Assist**: fill missing fields with regex patterns
+  if (process.env.DEBUG_REGEX === "1") {
+    console.log("[assist] text length:", pdfText.length); // should be ~24000 here, not a tiny window
+  }
   const assisted = applyRegexAssist(pdfText, wrapped);
   
   // 4) **Gatekeeper**: zero-out anything not literally present in pdfText (your function)

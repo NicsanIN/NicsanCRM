@@ -101,6 +101,9 @@ async function main() {
   try {
     console.log('🚀 Starting backend...');
     
+    // add near server startup (temporary)
+    console.log('[env] S3_BUCKET=%s AWS_REGION=%s', process.env.S3_BUCKET, process.env.AWS_REGION);
+    
     // Set up shutdown handlers first
     setupShutdownHandlers();
     

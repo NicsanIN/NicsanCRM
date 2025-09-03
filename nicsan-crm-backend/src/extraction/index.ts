@@ -5,10 +5,16 @@ import { extractWithOpenAI } from '../services/openaiExtract';
 const TEXT_SOURCE = (process.env.EXTRACT_TEXT_SOURCE ?? 'fast') as 'fast'|'ocr'|'auto';
 const THIN_TEXT_THRESHOLD = Number(process.env.THIN_TEXT_THRESHOLD ?? 500);
 
-async function getPdfTextSelected(s3Key: string): Promise<{ text: string; via: 'fast'|'ocr' }> {
+async function getPdfTextSelected(s3Key: string, uploadId?: string): Promise<{ text: string; via: 'fast'|'ocr' }> {
   if (TEXT_SOURCE === 'ocr') {
-    const text = await ocrPdfFromS3ToText(s3Key);
-    return { text, via: 'ocr' };
+    if (uploadId) {
+      const { text } = await ocrPdfFromS3ToText({ uploadId, s3Key });
+      return { text, via: 'ocr' };
+    } else {
+      // Fallback for backward compatibility
+      const { text } = await ocrPdfFromS3ToText({ uploadId: 'legacy', s3Key });
+      return { text, via: 'ocr' };
+    }
   }
   if (TEXT_SOURCE === 'fast') {
     const text = await getPdfTextFast(s3Key);
@@ -17,16 +23,22 @@ async function getPdfTextSelected(s3Key: string): Promise<{ text: string; via: '
   // auto
   const fast = await getPdfTextFast(s3Key);
   if (!fast || fast.length < THIN_TEXT_THRESHOLD) {
-    const ocr = await ocrPdfFromS3ToText(s3Key);
-    return (ocr?.length ?? 0) > (fast?.length ?? 0) ? { text: ocr, via: 'ocr' } : { text: fast, via: 'fast' };
+    if (uploadId) {
+      const { text: ocr } = await ocrPdfFromS3ToText({ uploadId, s3Key });
+      return (ocr?.length ?? 0) > (fast?.length ?? 0) ? { text: ocr, via: 'ocr' } : { text: fast, via: 'fast' };
+    } else {
+      // Fallback for backward compatibility
+      const { text: ocr } = await ocrPdfFromS3ToText({ uploadId: 'legacy', s3Key });
+      return (ocr?.length ?? 0) > (fast?.length ?? 0) ? { text: ocr, via: 'ocr' } : { text: fast, via: 'fast' };
+    }
   }
   return { text: fast, via: 'fast' };
 }
 
-export async function extractFromPdf(upload: { s3_key: string }, modelTag: 'primary' | 'secondary') {
+export async function extractFromPdf(upload: { s3_key: string; id?: string }, modelTag: 'primary' | 'secondary') {
   // text timing
   const tText0 = Date.now();
-  const { text: pdfText, via } = await getPdfTextSelected(upload.s3_key);
+  const { text: pdfText, via } = await getPdfTextSelected(upload.s3_key, upload.id);
   const text_ms = Date.now() - tText0;
 
   // llm timing

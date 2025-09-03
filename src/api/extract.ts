@@ -8,9 +8,10 @@ export const extractAPI = {
       throw new Error('Authentication token not found. Please log in again.');
     }
     
-    return apiCall('POST', `/extract/pdf/${uploadId}`, {
+    return apiCall(`/extract/pdf/${uploadId}`, {
+      method: 'POST',
       headers: { Authorization: `Bearer ${token}` }, // <-- required
-      body: { model }
+      body: JSON.stringify({ model })
     });
   },
   
@@ -21,7 +22,8 @@ export const extractAPI = {
       throw new Error('Authentication token not found. Please log in again.');
     }
     
-    return apiCall('POST', `/extract/pdf/${uploadId}/ocr`, {
+    return apiCall(`/extract/pdf/${uploadId}/ocr`, {
+      method: 'POST',
       headers: { Authorization: `Bearer ${token}` }, // <-- required
     });
   }

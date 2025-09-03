@@ -1,11 +1,11 @@
 import { AuthProvider } from './contexts/AuthContext';
-import NicsanCRMMock from "./NicsanCRMMock";
+import NicsanCRM from "./NicsanCRM";
 
 export default function App() {
   return (
     <AuthProvider>
       <div className="min-h-screen bg-zinc-50">
-        <NicsanCRMMock />
+        <NicsanCRM />
       </div>
     </AuthProvider>
   );

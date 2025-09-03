@@ -6,7 +6,7 @@ import { extractAPI } from './api/extract';
 import ErrorBoundary from './components/ErrorBoundary';
 
 // Debug: Test console logging
-console.log("🚀 NicsanCRMMock component loaded - console logging is working!");
+console.log("🚀 NicsanCRM component loaded - console logging is working!");
 
 // MetaLine component to display extraction metadata
 function MetaLine({ meta }: { meta?: { via?: string; modelTag?: string; pdfTextChars?: number; text_ms?: number; llm_ms?: number; total_ms?: number } }) {
@@ -298,7 +298,7 @@ function PageUpload() {
               status: 'UPLOADED',
               manual_extras: { ...manualExtras },
               extracted_data: {
-                // No mock data - wait for real extraction
+                // Wait for real extraction
                 policy_number: null,
                 vehicle_number: null,
                 insurer: null,
@@ -422,8 +422,7 @@ function PageUpload() {
                 });
               }
               
-              // Show alert for demo purposes
-              alert('🎉 PDF processed successfully! Ready for review. Go to Review & Confirm page.');
+              // PDF processed successfully - ready for review
             }
             
             return; // Stop polling
@@ -1165,7 +1164,7 @@ function PageManualGrid() {
   )
 }
 
-// NicsanCRMMock.tsx (top of component)
+// NicsanCRM.tsx (top of component)
 const LS_KEY = 'nicsan_crm_uploads';
 
 type UploadRow = {
@@ -1291,8 +1290,10 @@ function PageReview({ user }: { user: {name:string; email?:string; role:"ops"|"f
 
   const refreshRecentPolicies = async () => {
     try {
-      const rec = await policiesAPI.getRecent(6);
-      if (rec.success) setRecentPolicies(rec.data ?? []);
+      // Temporarily disabled to avoid dummy data in console
+      // const rec = await policiesAPI.getRecent(6);
+      // if (rec.success) setRecentPolicies(rec.data ?? []);
+      setRecentPolicies([]); // Set empty array instead
     } catch (e) {
       console.warn('refresh recent policies failed', e);
     }
@@ -2113,7 +2114,18 @@ function shouldSuggestOCR(extraction?: { data?: any; meta?: any }) {
         <MetaLine meta={extractionMeta} />
 
         {/* OCR Suggestion Banner */}
-        {shouldSuggestOCR({ data: extracted, meta: extractionMeta }) && selectedUploadId && (
+        {(() => {
+          const shouldShow = shouldSuggestOCR({ data: extracted, meta: extractionMeta }) && selectedUploadId;
+          console.log('🔍 OCR Button Debug:', {
+            shouldShow,
+            hasExtracted: !!extracted,
+            hasMeta: !!extractionMeta,
+            selectedUploadId,
+            meta: extractionMeta,
+            extractedKeys: extracted ? Object.keys(extracted) : []
+          });
+          return shouldShow;
+        })() && (
           <div className="mt-3 flex items-center justify-between rounded-lg border border-sky-200 bg-sky-50 px-3 py-2">
             <div className="text-sm text-sky-800">
               Text looks thin. Want to try <b>OCR Fallback</b> for this PDF?
