@@ -12,8 +12,10 @@ import uploadsRoutes from './routes/uploads';
 import dashboardRoutes from './routes/dashboard';
 import settingsRoutes from './routes/settings';
 import reviewRoutes from './routes/review';
+import extractRoutes from './routes/extract';
 import pool, { testDatabaseConnection } from './config/database';
 import { setupShutdownHandlers, shutdown } from './utils/shutdown';
+import "dotenv/config"; // loads .env into process.env
 
 
 // Load environment variables
@@ -23,24 +25,24 @@ const app = express();
 // Use 3001 by default for local backend
 const PORT = Number(process.env.PORT) || 3001;
 
-// Middleware
+// CORS FIRST - before any other middleware
+app.use(cors({
+  origin: ['http://localhost:5174', 'http://localhost:5173', 'http://localhost:5175'],
+  credentials: false, // you're authing with Bearer, not cookies
+  methods: ['GET','POST','PUT','PATCH','DELETE','OPTIONS'],
+  allowedHeaders: ['Content-Type','Authorization'],
+}));
+app.options('*', cors());
+
+// Then other middleware
 app.use(helmet());
-app.use(
-  cors({
-    origin:
-      process.env.CORS_ORIGIN ||
-      // Allow prod UI + local dev by default
-      ['https://crm.nicsanin.com', 'http://localhost:5173'],
-    credentials: true,
-  })
-);
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // Request logging middleware
-app.use((req, res, next) => {
-  console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);
-  next();
+app.use((req, _res, next) => { 
+  console.log('[REQ]', req.method, req.originalUrl); 
+  next(); 
 });
 
 // --- Health checks ---
@@ -86,8 +88,9 @@ app.use('/api', uploadsRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/settings', settingsRoutes);
 app.use('/api', reviewRoutes);
+app.use('/api/extract', extractRoutes);
 
-console.log('🧭 Routes mounted: /api/auth/*, /api/policies/*, /api/users/*, /api/upload/*, /api/uploads/*, /api/dashboard/*, /api/settings/*, /api/uploads/*/confirm-save');
+console.log('🧭 Routes mounted: /api/auth/*, /api/policies/*, /api/users/*, /api/upload/*, /api/uploads/*, /api/dashboard/*, /api/settings/*, /api/uploads/*/confirm-save, /api/extract/*');
 
 // Error handling middleware
 app.use(notFoundHandler);

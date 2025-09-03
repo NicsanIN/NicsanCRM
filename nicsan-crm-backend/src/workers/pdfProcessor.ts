@@ -1,6 +1,7 @@
 import pool from "../config/database";
 import { extractFromPdf } from "../extraction";
 import { parsePolicyExtractV1 } from "../extraction/schema";
+import { toInsurerHint } from "../extraction/insurerMap";
 
 const Allowed = new Set(["UPLOADED","PROCESSING","REVIEW","SAVED","COMPLETED","FAILED"]);
 async function setStatus(id: string | number, status: string) {
@@ -22,20 +23,30 @@ export async function processUpload(uploadId: string): Promise<void> {
   try {
     // 2) load upload row
     const res = await pool.query(
-      `SELECT id::text, s3_key, extracted_data FROM pdf_uploads WHERE id = $1 LIMIT 1`,
+      `SELECT id::text, s3_key, extracted_data, uploaded_by FROM pdf_uploads WHERE id = $1 LIMIT 1`,
       [uploadId]
     );
     if (res.rows.length === 0) {
       throw new Error("Upload not found");
     }
     const upload = res.rows[0];
-    const insurerHint: string | null = upload.extracted_data?.insurer ?? null;
+    
+    // right after you load the upload row from DB:
+    console.log("[EXTRACT] uploadId=%s s3_key(DB)=%s userId=%s",
+      upload.id, upload.s3_key, upload.uploaded_by);
+
+    // guard: key must contain the user folder
+    if (!upload.s3_key?.includes(`/${upload.uploaded_by}/`)) {
+      console.error("[EXTRACT] BAD S3 KEY (missing user folder). Fix the DB row.", {
+        uploadId: upload.id, s3_key: upload.s3_key, userId: upload.uploaded_by,
+      });
+    }
+    
+    const rawInsurerHint: string | null = upload.extracted_data?.insurer ?? null;
+    const insurerHintSafe = toInsurerHint(rawInsurerHint); // Map to strict union
 
     // 3) run extractor
-    const resultJson = await extractFromPdf({
-      s3Key: upload.s3_key,
-      insurerHint,
-    });
+    const { data: resultJson, meta } = await extractFromPdf({ s3_key: upload.s3_key }, "primary");
 
     // Validate shape
     const parsed = parsePolicyExtractV1(resultJson);

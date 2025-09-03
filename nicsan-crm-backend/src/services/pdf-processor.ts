@@ -21,7 +21,8 @@ export class PDFProcessor {
    */
   async generatePresignedUploadUrl(filename: string, userId: string): Promise<string> {
     const timestamp = Date.now();
-    const s3Key = `uploads/${timestamp}_${filename}`;
+    const safeName = filename.replace(/[^\w.\- ]+/g, ""); // keep spaces, underscores fine
+    const s3Key = `uploads/${userId}/${timestamp}_${safeName}`;
     
     const presignedUrl = s3.getSignedUrl('putObject', {
       Bucket: s3Config.bucketName,

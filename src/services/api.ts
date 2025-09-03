@@ -1,7 +1,33 @@
 // API Service Layer for Nicsan CRM
 // Handles all communication with the backend
+// frontend/src/api.ts
 
-const API_BASE = '/api';
+function makeUrl(path: string) {
+  const p = path.startsWith('/') ? path : `/${path}`;
+  return p.startsWith('/api/') ? p : `/api${p}`; // always via Vite proxy (5174)
+}
+
+export async function apiCall(path: string, opts: RequestInit = {}) {
+  const token = localStorage.getItem('token') || '';
+  const isForm = opts.body instanceof FormData;
+
+  const headers = new Headers(opts.headers || {});
+  if (token) headers.set('Authorization', `Bearer ${token}`);
+  if (!isForm && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
+
+  const res = await fetch(makeUrl(path), { ...opts, headers });
+  const text = await res.text().catch(() => '');
+  let data: any = null; try { data = text ? JSON.parse(text) : null; } catch {}
+  if (!res.ok) { const e: any = new Error(data?.error || res.statusText || 'Request failed'); e.status = res.status; e.data = data; throw e; }
+  return data ?? {};
+}
+
+export async function uploadPDF(file: File, insurer: string) {
+  const form = new FormData();
+  form.append('pdf', file);        // ← field name MUST be "pdf"
+  form.append('insurer', insurer); // e.g., "TATA_AIG" | "DIGIT"
+  return apiCall('/upload/pdf/file', { method: 'POST', body: form });
+}
 
 // Types for API responses
 export interface ApiResponse<T = any> {
@@ -77,69 +103,6 @@ export interface DashboardMetrics {
   total_uploads: number;
 }
 
-type HttpMethod = 'GET' | 'POST' | 'PUT' | 'DELETE';
-
-type ApiOpts = {
-  query?: Record<string, string | number | boolean | (string | number | boolean)[] | undefined>;
-  body?: any;
-  headers?: Record<string, string>;
-};
-
-export async function apiCall(method: HttpMethod, path: string, opts: ApiOpts = {}) {
-  const { query, body, headers } = opts;
-
-  // build query string safely (supports arrays)
-  const qs = query
-    ? '?' +
-      new URLSearchParams(
-        Object.entries(query)
-          .flatMap(([k, v]) => {
-            if (v === undefined || v === null) return [];
-            return Array.isArray(v) ? v.map(iv => [k, String(iv)]) : [[k, String(v)]];
-          })
-      ).toString()
-    : '';
-
-  // ✅ CORRECT: /api + path (NOT /api + method + path)
-  const url = `${API_BASE}${path}${qs}`;
-
-  const token = localStorage.getItem('authToken');
-
-  const res = await fetch(url, {
-    method,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token && { Authorization: `Bearer ${token}` }),
-      ...(headers || {}),
-    },
-    body: method === 'GET' ? undefined : JSON.stringify(body ?? {}),
-  });
-
-  if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    throw new Error(text || res.statusText);
-  }
-
-  // allow empty JSON
-  try {
-    const data = await res.json();
-    // Convert backend response format {ok: true, data: {...}} to frontend format {success: true, data: {...}}
-    if (data && typeof data === 'object') {
-      if ('ok' in data) {
-        return {
-          success: data.ok,
-          data: data.data,
-          error: data.error,
-          message: data.message
-        };
-      }
-    }
-    return data;
-  } catch {
-    return undefined;
-  }
-}
-
 // Helpers for Confirm & Save payload (Zod-shaped)
 const asNum = (v: any) => {
   if (v === null || v === undefined || v === '') return undefined;
@@ -184,27 +147,30 @@ export const buildConfirmPayload = (form: any) => ({
 // Authentication API
 export const authAPI = {
   login: async (credentials: LoginRequest): Promise<ApiResponse<LoginResponse>> => {
-
-    const response = await apiCall('POST', '/auth/login', {
-      body: credentials,
+    const response = await apiCall('/api/auth/login', {
+      method: 'POST',
+      body: JSON.stringify(credentials),
     });
-
     return response;
   },
 
   register: async (userData: any): Promise<ApiResponse<any>> => {
-    return apiCall('POST', '/auth/register', {
-      body: userData,
+    return apiCall('/api/auth/register', {
+      method: 'POST',
+      body: JSON.stringify(userData),
     });
   },
 
   getProfile: async (): Promise<ApiResponse<any>> => {
-    return apiCall('GET', '/auth/profile');
+    return apiCall('/api/auth/profile', {
+      method: 'GET',
+    });
   },
 
   changePassword: async (passwordData: any): Promise<ApiResponse<any>> => {
-    return apiCall('PUT', '/auth/change-password', {
-      body: passwordData,
+    return apiCall('/api/auth/change-password', {
+      method: 'PUT',
+      body: JSON.stringify(passwordData),
     });
   },
 };
@@ -212,95 +178,69 @@ export const authAPI = {
 // Policies API
 export const policiesAPI = {
   getAll: async (page = 1, limit = 50, filters?: any): Promise<ApiResponse<{ policies: Policy[]; total: number }>> => {
-    return apiCall('GET', '/policies', {
-      query: {
-        page,
-        limit,
-        ...(filters && { filters: JSON.stringify(filters) }),
-      },
+    const params = new URLSearchParams({
+      page: String(page),
+      limit: String(limit),
+      ...(filters && { filters: JSON.stringify(filters) }),
+    });
+    return apiCall(`/policies?${params}`, {
+      method: 'GET',
     });
   },
 
   getById: async (id: string): Promise<ApiResponse<Policy>> => {
-    return apiCall('GET', `/policies/${id}`);
+    return apiCall(`/policies/${id}`, {
+      method: 'GET',
+    });
   },
 
   create: async (policy: PolicyCreateRequest): Promise<ApiResponse<Policy>> => {
-    return apiCall('POST', '/policies', {
-      body: policy,
+    return apiCall('/policies', {
+      method: 'POST',
+      body: JSON.stringify(policy),
     });
   },
 
   update: async (id: string, policy: Partial<PolicyCreateRequest>): Promise<ApiResponse<Policy>> => {
-    return apiCall('PUT', `/policies/${id}`, {
-      body: policy,
+    return apiCall(`/policies/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(policy),
     });
   },
 
   delete: async (id: string): Promise<ApiResponse<any>> => {
-    return apiCall('DELETE', `/policies/${id}`);
+    return apiCall(`/policies/${id}`, {
+      method: 'DELETE',
+    });
   },
 
   bulkCreate: async (policies: PolicyCreateRequest[]): Promise<ApiResponse<any>> => {
-    return apiCall('POST', '/policies/bulk', {
-      body: { policies },
+    return apiCall('/policies/bulk', {
+      method: 'POST',
+      body: JSON.stringify({ policies }),
     });
   },
 
   getRecent: async (limit = 6): Promise<ApiResponse<any[]>> => {
-    return apiCall('GET', '/policies/recent', {
-      query: { limit },
+    return apiCall(`/policies/recent?limit=${limit}`, {
+      method: 'GET',
     });
   },
 };
 
 // PDF Upload API
 export const uploadAPI = {
-  uploadPDF: async (formData: FormData): Promise<ApiResponse<PDFUpload>> => {
-    try {
-      const token = localStorage.getItem('authToken');
-      if (!token) {
-        throw new Error('No authentication token found');
-      }
-
-      // Use fetch directly for FormData since apiCall doesn't handle it well
-      const response = await fetch(`${API_BASE}/upload/pdf/file`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          // Don't set Content-Type for FormData - let browser set it with boundary
-        },
-        body: formData,
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
-      }
-
-      const data = await response.json();
-      return {
-        success: true,
-        data: data.data || data,
-        message: data.message || 'PDF uploaded successfully'
-      };
-    } catch (error) {
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Failed to upload PDF',
-        message: 'Upload failed'
-      };
-    }
-  },
+  uploadPDF: uploadPDF, // Use the standalone function
 
   getUploads: async (page = 1, limit = 50, statuses?: string[]): Promise<PDFUpload[]> => {
     try {
-      const resp = await apiCall('GET', '/upload/pdf', {
-        query: {
-          page,
-          limit,
-          ...(statuses?.length && { status: statuses }), // array ok; apiCall builds repeated ?status=A&status=B
-        },
+      const params = new URLSearchParams({
+        page: String(page),
+        limit: String(limit),
+        ...(statuses?.length && { status: statuses.join(',') }),
+      });
+      const resp = await apiCall(`/upload/pdf?${params}`, {
+        method: 'GET',
       });
       // Coerce various possible backend shapes to a plain array of uploads
       // Supported shapes:
@@ -322,37 +262,37 @@ export const uploadAPI = {
   },
 
   getUploadById: async (uploadId: string): Promise<ApiResponse<PDFUpload>> => {
-    return apiCall('GET', `/upload/pdf/${uploadId}`);
-  },
-
-  getReview: async (uploadId: string): Promise<ApiResponse<any>> => {
-    return apiCall('GET', `/uploads/${uploadId}/review`);
-  },
-
-  // Create minimal upload record
-  createUpload: async (filename: string, s3_key?: string, insurer?: string): Promise<ApiResponse<PDFUpload>> => {
-    return apiCall('POST', '/upload/pdf', {
-      body: {
-        filename,
-        s3_key: s3_key || null,
-        insurer: insurer || null
-      }
+    return apiCall(`/upload/pdf/${uploadId}`, {
+      method: 'GET',
     });
   },
 
+  getReview: async (uploadId: string): Promise<ApiResponse<any>> => {
+    return apiCall(`/uploads/${uploadId}/review`, {
+      method: 'GET',
+    });
+  },
+
+  // Create minimal upload record - REMOVED: use /upload/pdf/file instead
+
   getUploadStatus: async (s3Key: string): Promise<ApiResponse<PDFUpload>> => {
-    return apiCall('GET', `/upload/internal/by-s3key/${encodeURIComponent(s3Key)}`);
+    return apiCall(`/upload/internal/by-s3key/${encodeURIComponent(s3Key)}`, {
+      method: 'GET',
+    });
   },
 
   retryProcessing: async (id: string): Promise<ApiResponse<any>> => {
-    return apiCall('POST', `/upload/pdf/${id}/retry`);
+    return apiCall(`/upload/pdf/${id}/retry`, {
+      method: 'POST',
+    });
   },
 
   confirmAndSave: async (uploadId: string, form: any): Promise<ApiResponse<any>> => {
     const payload = buildConfirmPayload(form);
     console.debug('🔧 confirm-save payload', payload);
-    return apiCall('POST', `/uploads/${uploadId}/confirm-save`, {
-      body: payload,
+    return apiCall(`/uploads/${uploadId}/confirm-save`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
     });
   },
 };
@@ -360,50 +300,67 @@ export const uploadAPI = {
 // Dashboard API
 export const dashboardAPI = {
   getMetrics: async (): Promise<ApiResponse<DashboardMetrics>> => {
-    return apiCall('GET', '/dashboard/metrics');
+    return apiCall('/dashboard/metrics', {
+      method: 'GET',
+    });
   },
 
   getSalesReps: async (): Promise<ApiResponse<any[]>> => {
-    return apiCall('GET', '/dashboard/sales-reps');
+    return apiCall('/dashboard/sales-reps', {
+      method: 'GET',
+    });
   },
 
   getTrends: async (period = 'month'): Promise<ApiResponse<any[]>> => {
-    return apiCall('GET', '/dashboard/trends', {
-      query: { period },
+    return apiCall(`/dashboard/trends?period=${period}`, {
+      method: 'GET',
     });
   },
 
   getDataSources: async (): Promise<ApiResponse<any[]>> => {
-    return apiCall('GET', '/dashboard/data-sources');
+    return apiCall('/dashboard/data-sources', {
+      method: 'GET',
+    });
   },
 
   getVehicleAnalysis: async (): Promise<ApiResponse<any[]>> => {
-    return apiCall('GET', '/dashboard/vehicle-analysis');
+    return apiCall('/dashboard/vehicle-analysis', {
+      method: 'GET',
+    });
   },
 
   getKPIs: async (): Promise<ApiResponse<any>> => {
-    return apiCall('GET', '/dashboard/kpis');
+    return apiCall('/dashboard/kpis', {
+      method: 'GET',
+    });
   },
 };
 
 // Users API
 export const usersAPI = {
   getAll: async (): Promise<ApiResponse<any[]>> => {
-    return apiCall('GET', '/users');
+    return apiCall('/users', {
+      method: 'GET',
+    });
   },
 
   getById: async (id: string): Promise<ApiResponse<any>> => {
-    return apiCall('GET', `/users/${id}`);
+    return apiCall(`/users/${id}`, {
+      method: 'GET',
+    });
   },
 
   update: async (id: string, userData: any): Promise<ApiResponse<any>> => {
-    return apiCall('PUT', `/users/${id}`, {
-      body: userData,
+    return apiCall(`/users/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(userData),
     });
   },
 
   delete: async (id: string): Promise<ApiResponse<any>> => {
-    return apiCall('DELETE', `/users/${id}`);
+    return apiCall(`/users/${id}`, {
+      method: 'DELETE',
+    });
   },
 };
 

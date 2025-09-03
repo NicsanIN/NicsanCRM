@@ -2,7 +2,20 @@ import React, { useMemo, useState, useRef, useEffect, useCallback } from "react"
 import { Upload, FileText, CheckCircle2, AlertTriangle, Table2, Settings, LayoutDashboard, Users, BarChart3, BadgeInfo, Filter, Lock, LogOut, Car, SlidersHorizontal, TrendingUp } from "lucide-react";
 import { ResponsiveContainer, CartesianGrid, BarChart, Bar, Legend, Area, AreaChart, XAxis, YAxis, Tooltip } from "recharts";
 import { uploadAPI, policiesAPI, authAPI, authUtils } from './services/api';
+import { extractAPI } from './api/extract';
 import ErrorBoundary from './components/ErrorBoundary';
+
+// MetaLine component to display extraction metadata
+function MetaLine({ meta }: { meta?: { via?: string; modelTag?: string; pdfTextChars?: number; text_ms?: number; llm_ms?: number; total_ms?: number } }) {
+  if (!meta) return null;
+  const via = meta.via?.toUpperCase();
+  const model = meta.modelTag === 'secondary' ? 'gpt-4.1-mini' : 'gpt-4o-mini';
+  return (
+    <div className="mt-1 text-xs text-gray-500">
+      {via} • {model} • {meta.pdfTextChars ?? 0} chars • {meta.text_ms ?? 0}ms text + {meta.llm_ms ?? 0}ms LLM = {meta.total_ms ?? 0}ms
+    </div>
+  );
+}
 
 // --- Nicsan CRM v1 UI/UX Mock (updated) ---
 // Adds: Password-protected login, optimized Manual Form, Founder filters, KPI dashboard (your new metrics)
@@ -205,6 +218,7 @@ function OpsSidebar({ page, setPage }: { page: string; setPage: (p: string) => v
 
 function PageUpload() {
   const [uploadStatus, setUploadStatus] = useState<string>('');
+  const [uploading, setUploading] = useState(false);
   const [toast, setToast] = useState<{type: 'success' | 'error', message: string} | null>(null);
   const [uploadedFiles, setUploadedFiles] = useState<any[]>([]);
   const [selectedInsurer, setSelectedInsurer] = useState<'TATA_AIG' | 'DIGIT'>('TATA_AIG');
@@ -224,57 +238,50 @@ function PageUpload() {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleFiles = async (files: FileList) => {
+    if (!files?.length || uploading) return; // prevent duplicates
+    setUploading(true);
+    
     const file = files[0];
-    if (!file) return;
+    if (!file) {
+      setUploading(false);
+      return;
+    }
     
     if (!selectedInsurer) {
-      setUploadStatus('Please select an insurer first');
+      setToast({type: 'error', message: 'Please select an insurer first'});
+      setTimeout(() => setToast(null), 3000);
+      setUploading(false);
       return;
     }
 
     if (!manualExtrasSaved) {
-      setUploadStatus('⚠️ Please save your manual extras first before uploading PDF');
+      setToast({type: 'error', message: '⚠️ Please save your manual extras first before uploading PDF'});
+      setTimeout(() => setToast(null), 3000);
+      setUploading(false);
       return;
     }
 
     setUploadStatus('Uploading...');
 
     try {
-      // Create FormData with insurer and manual extras
-      const formData = new FormData();
-      formData.append('pdf', file);
-      formData.append('insurer', selectedInsurer);
+      // Upload PDF with insurer
+      const result = await uploadAPI.uploadPDF(file, selectedInsurer);
       
-      // Add manual extras to FormData
-      Object.entries(manualExtras).forEach(([key, value]) => {
-        if (value) {
-          formData.append(`manual_${key}`, value);
-        }
-      });
-      
-      const result = await uploadAPI.uploadPDF(formData);
-      
-      if (result.success) {
-        setUploadStatus('Upload successful! Creating server record...');
-        
-        // Create server-side upload record
-        const s3Key = result.data?.s3_key || `uploads/${Date.now()}_${file.name}`;
-        const serverResp = await uploadAPI.createUpload(file.name, s3Key, selectedInsurer);
-        
-        if (serverResp.success && serverResp.data) {
+      if (result.ok) {
           setUploadStatus('Upload successful! Ready for review.');
-          setToast({type: 'success', message: 'Upload successful! Server record created.'});
+        setToast({type: 'success', message: 'Upload successful!'});
           // Auto-dismiss toast after 3 seconds
           setTimeout(() => setToast(null), 3000);
           
-          // Use server data as the primary record
-          const serverItem = serverResp.data;
+        // Use the upload result data directly
+        const uploadData = result.data;
+        if (uploadData) {
         const newFile = {
-            id: serverItem.id,
-            filename: serverItem.filename,
-            status: serverItem.upload_status || 'UPLOADED',
+            id: uploadData.id,
+            filename: uploadData.filename,
+            status: uploadData.upload_status || 'UPLOADED',
             insurer: selectedInsurer,
-            s3_key: serverItem.s3_key || s3Key,
+            s3_key: uploadData.s3_key,
             time: new Date().toLocaleTimeString(),
             size: (file.size / 1024 / 1024).toFixed(2) + ' MB',
             // Structure that matches Review page expectations
@@ -314,65 +321,11 @@ function PageUpload() {
           const allUploads = [newFile, ...uploadedFiles];
           localStorage.setItem('nicsan_crm_uploads', JSON.stringify(allUploads));
 
+          // Set the newly uploaded file as the selected one for the Review page
+          localStorage.setItem('nicsan_crm_selected_upload_id', newFile.id);
           
           // Start polling for status updates
-          pollUploadStatus(serverItem.id);
-        } else {
-          // Fallback to local-only record if server creation fails
-          setUploadStatus('Upload successful! (Server record creation failed)');
-          setToast({type: 'error', message: 'Upload successful but server record creation failed.'});
-          // Auto-dismiss toast after 5 seconds for errors
-          setTimeout(() => setToast(null), 5000);
-          const newFile = {
-            id: result.data?.id || Date.now(),
-          filename: file.name,
-          status: 'UPLOADED',
-          insurer: selectedInsurer,
-            s3_key: s3Key,
-          time: new Date().toLocaleTimeString(),
-          size: (file.size / 1024 / 1024).toFixed(2) + ' MB',
-          // Structure that matches Review page expectations
-          extracted_data: {
-            insurer: selectedInsurer,
-            status: 'UPLOADED',
-            manual_extras: { ...manualExtras },
-            extracted_data: {
-                // Mock PDF data for demo (in real app, this comes from your extractor)
-              policy_number: "TA-" + Math.floor(Math.random() * 10000),
-              vehicle_number: "KA01AB" + Math.floor(Math.random() * 1000),
-              insurer: selectedInsurer === 'TATA_AIG' ? 'Tata AIG' : 'Digit',
-              product_type: "Private Car",
-              vehicle_type: "Private Car",
-              make: "Maruti",
-              model: "Swift",
-              cc: "1197",
-              manufacturing_year: "2021",
-              issue_date: new Date().toISOString().split('T')[0],
-              expiry_date: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-              idv: 495000,
-              ncb: 20,
-              discount: 0,
-              net_od: 5400,
-              ref: "",
-              total_od: 7200,
-              net_premium: 10800,
-              total_premium: 12150,
-              confidence_score: 0.86
-            }
-          }
-        };
-        
-        setUploadedFiles(prev => [newFile, ...prev]);
-        
-        // Save to localStorage so Review page can access it
-        const allUploads = [newFile, ...uploadedFiles];
-        localStorage.setItem('nicsan_crm_uploads', JSON.stringify(allUploads));
-
-        
-        // Start polling for status updates
-          if (result.data?.id) {
-            pollUploadStatus(result.data.id);
-          }
+          pollUploadStatus(uploadData.id);
         }
         
         // Clear manual extras after successful upload
@@ -391,9 +344,17 @@ function PageUpload() {
         setManualExtrasSaved(false);
       } else {
         setUploadStatus(`Upload failed: ${result.error}`);
+        setToast({type: 'error', message: `Upload failed: ${result.error}`});
+        setTimeout(() => setToast(null), 5000);
       }
-    } catch (error) {
-      setUploadStatus(`Upload error: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    } catch (err: any) {
+      console.error('uploadPDF failed', { status: err?.status, data: err?.data, err });
+      const errorMessage = `Upload failed: ${err?.status ?? ''} ${err?.data?.error ?? err?.message ?? 'unknown'}`;
+      setUploadStatus(errorMessage);
+      setToast({type: 'error', message: errorMessage});
+      setTimeout(() => setToast(null), 5000);
+    } finally {
+      setUploading(false);
     }
   };
 
@@ -661,12 +622,12 @@ function PageUpload() {
 
         <div 
           className={`border-2 border-dashed rounded-2xl p-10 text-center transition-colors ${
-            uploadStatus.includes('Uploading') ? 'border-indigo-400 bg-indigo-50' : 'border-zinc-300 hover:border-zinc-400'
+            uploading ? 'border-indigo-400 bg-indigo-50 cursor-not-allowed' : 'border-zinc-300 hover:border-zinc-400'
           }`}
           onDragOver={(e) => e.preventDefault()}
           onDrop={(e) => {
             e.preventDefault();
-            if (e.dataTransfer.files) handleFiles(e.dataTransfer.files);
+            if (!uploading && e.dataTransfer.files) handleFiles(e.dataTransfer.files);
           }}
         >
           <input 
@@ -674,6 +635,7 @@ function PageUpload() {
             type="file" 
             accept=".pdf" 
             onChange={handleFileSelect}
+            disabled={uploading}
             className="hidden"
           />
           <div className="space-y-4">
@@ -681,8 +643,9 @@ function PageUpload() {
             <div>
               <div className="text-xl font-medium">Drop PDF here or</div>
               <button 
-                onClick={() => fileInputRef.current?.click()}
-                className="text-indigo-600 hover:text-indigo-700 font-medium"
+                onClick={() => !uploading && fileInputRef.current?.click()}
+                disabled={uploading}
+                className={`font-medium ${uploading ? 'text-gray-400 cursor-not-allowed' : 'text-indigo-600 hover:text-indigo-700'}`}
               >
                 browse files
               </button>
@@ -1243,7 +1206,7 @@ function PageReview({ user }: { user: {name:string; email?:string; role:"ops"|"f
         
         setUploads(mergedUploads);
         saveUploadsToLS(mergedUploads);
-      } else {
+        } else {
         // If no server uploads, just use local uploads
         const localUploads = loadUploadsFromLS();
         if (localUploads.length > 0) {
@@ -1284,6 +1247,29 @@ function PageReview({ user }: { user: {name:string; email?:string; role:"ops"|"f
     })();
   }, []);
 
+  // B) Ensure the dropdown's selected row = the one you just uploaded
+  // Check for newly uploaded file and auto-select it
+  useEffect(() => {
+    const newlyUploadedId = localStorage.getItem('nicsan_crm_selected_upload_id');
+    if (newlyUploadedId && uploads.length > 0) {
+      // Find the upload in the list
+      const upload = uploads.find(u => u.id === newlyUploadedId);
+      if (upload) {
+        // Auto-select the newly uploaded file
+        setSelectedKey(`upload:${upload.id}`);
+        setSelectedUploadId(upload.id);
+        setSelectedId(upload.id);
+        setSelectedKind('upload');
+        setSelectedPolicyId(undefined);
+        
+        // Clear the flag so it doesn't auto-select again
+        localStorage.removeItem('nicsan_crm_selected_upload_id');
+        
+        console.log(`[REVIEW] Auto-selected newly uploaded file: ${upload.filename} (${upload.id})`);
+      }
+    }
+  }, [uploads]); // Run when uploads list changes
+
   const loadUploadData = async (uploadId: string) => {
     try {
       // In real app, this would fetch the actual upload data from backend
@@ -1300,6 +1286,97 @@ function PageReview({ user }: { user: {name:string; email?:string; role:"ops"|"f
         type: 'error', 
         message: 'Failed to load upload data. Please try again.' 
       });
+    }
+  };
+
+  // ========= OpenAI Extraction Functions =========
+  const [extractionLoading, setExtractionLoading] = useState(false);
+  const [extractionError, setExtractionError] = useState<string | null>(null);
+  const [extractionMeta, setExtractionMeta] = useState<any>(null);
+
+  const handleExtractWithModel = async (model: 'primary' | 'secondary') => {
+    if (!selectedUploadId) {
+      setExtractionError('No upload selected');
+      return;
+    }
+    
+    try {
+      setExtractionLoading(true);
+      setExtractionError(null);
+      
+      const result = await extractAPI.extractPDF(selectedUploadId, model);
+      
+      if (result.success && result.data) {
+        // Update form with extracted data
+        setReviewData((prev: any) => ({
+          ...prev,
+          extracted_data: result.data
+        }));
+        setPdfData(result.data);
+        setExtractionMeta(result.meta);
+      setSubmitMessage({ 
+        type: 'success', 
+          message: `Extraction successful with ${model} model` 
+        });
+      } else {
+        setExtractionError(result.error || 'Extraction failed');
+        setSubmitMessage({ 
+          type: 'error', 
+          message: result.error || 'Extraction failed' 
+        });
+      }
+    } catch (error) {
+      const errorMsg = 'Extraction failed';
+      setExtractionError(errorMsg);
+      setSubmitMessage({ 
+        type: 'error', 
+        message: errorMsg 
+      });
+    } finally {
+      setExtractionLoading(false);
+    }
+  };
+
+  const handleExtractOCR = async (uploadId: string) => {
+    if (!uploadId) {
+      setExtractionError('No upload selected');
+      return;
+    }
+    
+    try {
+      setExtractionLoading(true);
+      setExtractionError(null);
+      
+      const result = await extractAPI.extractOCR(uploadId);
+      
+      if (result.success && result.data) {
+        // Update form with extracted data
+        setReviewData((prev: any) => ({
+          ...prev,
+          extracted_data: result.data
+        }));
+        setPdfData(result.data);
+        setExtractionMeta(result.meta);
+        setSubmitMessage({ 
+          type: 'success', 
+          message: 'OCR extraction successful' 
+        });
+      } else {
+        setExtractionError(result.error || 'OCR extraction failed');
+        setSubmitMessage({ 
+          type: 'error', 
+          message: result.error || 'OCR extraction failed' 
+        });
+      }
+    } catch (error) {
+      const errorMsg = 'OCR extraction failed';
+      setExtractionError(errorMsg);
+      setSubmitMessage({ 
+        type: 'error', 
+        message: errorMsg 
+      });
+    } finally {
+      setExtractionLoading(false);
     }
   };
 
@@ -1654,6 +1731,30 @@ function PageReview({ user }: { user: {name:string; email?:string; role:"ops"|"f
               Load Upload Data
             </button>
           </div>
+          
+          {/* OpenAI Extraction Buttons */}
+          <div className="flex gap-2 mt-3">
+            <button 
+              onClick={() => handleExtractWithModel('primary')}
+              disabled={extractionLoading || !selectedUploadId}
+              className="px-4 py-2 bg-blue-500 text-white rounded text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {extractionLoading ? 'Extracting...' : 'Extract (Fast)'}
+            </button>
+            <button 
+              onClick={() => handleExtractWithModel('secondary')}
+              disabled={extractionLoading || !selectedUploadId}
+              className="px-4 py-2 bg-green-500 text-white rounded text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {extractionLoading ? 'Extracting...' : 'Extract (Secondary)'}
+            </button>
+          </div>
+          
+          {extractionError && (
+            <div className="mt-2 p-2 bg-red-50 border border-red-200 rounded text-red-700 text-sm">
+              {extractionError}
+            </div>
+          )}
         </div>
       </Card>
     );
@@ -1681,6 +1782,34 @@ function PageReview({ user }: { user: {name:string; email?:string; role:"ops"|"f
   // Small helper so templates stay clean
   const field = (k: string, fallback: any = '') =>
     extracted?.[k]?.value ?? safePdfData?.[k] ?? fallback;
+
+  // OCR suggestion helper
+  function hasVal(v?: any) {
+  const s = v?.value ?? null;
+  if (s === null) return false;
+  return String(s).trim().length > 0;
+}
+
+function shouldSuggestOCR(extraction?: { data?: any; meta?: any }) {
+  if (!extraction?.meta || !extraction?.data) return false;
+
+  const isFast = extraction.meta.via === 'fast';
+  const chars = Number(extraction.meta.pdfTextChars ?? 0);
+
+  // Key IDs missing?
+  const missingPolicy = !hasVal(extraction.data.policy_number);
+  const missingReg    = !hasVal(extraction.data.vehicle_number);
+
+  // Optional: consider premiums/IDV too (stronger nudge)
+  const missingPrem   = !hasVal(extraction.data.total_premium);
+  const missingIDV    = !hasVal(extraction.data.idv);
+
+  // Thresholds (tweakable)
+  const CHAR_THRESHOLD = 500;  // text is "thin" below this
+  const NEEDS_OCR = (missingPolicy && missingReg) || (missingPrem && missingIDV);
+
+  return isFast && chars < CHAR_THRESHOLD && NEEDS_OCR;
+}
   
   // Guard UI when upload is still processing
   if (selectedKind === 'upload' && selectedId) {
@@ -1856,6 +1985,24 @@ function PageReview({ user }: { user: {name:string; email?:string; role:"ops"|"f
             />
           </div>
         </div>
+
+        {/* Extraction Metadata */}
+        <MetaLine meta={extractionMeta} />
+
+        {/* OCR Suggestion Banner */}
+        {shouldSuggestOCR({ data: extracted, meta: extractionMeta }) && selectedUploadId && (
+          <div className="mt-3 flex items-center justify-between rounded-lg border border-sky-200 bg-sky-50 px-3 py-2">
+            <div className="text-sm text-sky-800">
+              Text looks thin. Want to try <b>OCR Fallback</b> for this PDF?
+            </div>
+            <button
+              className="px-3 py-1 rounded bg-sky-700 text-white"
+              onClick={() => handleExtractOCR(selectedUploadId)}
+            >
+              Use OCR Fallback
+            </button>
+          </div>
+        )}
 
         {/* Manual Extras Section */}
         <div className="mb-6">

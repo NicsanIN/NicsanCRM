@@ -47,7 +47,8 @@ export class NicsanCRMService {
 
   private async checkBackendAvailability(): Promise<void> {
     try {
-      const response = await fetch('http://localhost:3001/health');
+      const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:3001";
+              const response = await fetch(`${API_BASE}/api/health`);
       this.isBackendAvailable = response.ok;
       console.log('✅ Backend is available');
     } catch (error) {
@@ -206,10 +207,10 @@ export class NicsanCRMService {
     };
   }
 
-  async uploadPDF(file: File): Promise<any> {
+  async uploadPDF(file: File, insurer: string): Promise<any> {
     if (this.isBackendAvailable) {
       try {
-        return await uploadAPI.uploadPDF(file);
+        return await uploadAPI.uploadPDF(file, insurer);
       } catch (error) {
         console.error('PDF upload failed:', error);
       }

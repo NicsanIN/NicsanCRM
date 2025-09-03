@@ -39,6 +39,32 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
   const isAuthenticated = !!user;
 
+  // DEV SHORTCUT: Inject dev JWT token
+  useEffect(() => {
+    // Expose dev login function to window for console access
+    (window as any).devLogin = () => {
+      const devToken = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiJkZXYtdXNlci1pZCIsImVtYWlsIjoidGVzdEBleGFtcGxlLmNvbSIsInJvbGUiOiJmb3VuZGVyIiwiaWF0IjoxNzM0NzI5NjAwLCJleHAiOjE3MzQ4MTYwMDB9.devtoken';
+      const devUser = {
+        id: 'dev-user-id',
+        email: 'test@example.com',
+        name: 'Dev User',
+        role: 'founder' as const
+      };
+      
+      authUtils.setToken(devToken);
+      setUser(devUser);
+      console.log('🔧 Dev login successful!', { user: devUser });
+      
+      // Reload to ensure all components pick up the auth state
+      window.location.reload();
+    };
+
+    // Cleanup on unmount
+    return () => {
+      delete (window as any).devLogin;
+    };
+  }, []);
+
   // Check if user is already logged in on app start
   useEffect(() => {
     const checkAuth = async () => {

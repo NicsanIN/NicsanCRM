@@ -3,7 +3,8 @@ import multer from 'multer';
 import pool from '../config/database';
 import { authenticateToken, requireAnyRole, AuthenticatedRequest } from '../middleware/auth';
 import { s3, s3Config, validateFile } from '../config/aws';
-import { putPdf, S3_BUCKET } from '../lib/s3';
+import { putPdfToS3 } from '../services/uploads';
+import { S3_BUCKET } from '../lib/s3';
 import { createError } from '../middleware/errorHandler';
 import { PDFUpload, ApiResponse } from '../types';
 import PDFProcessor from '../services/pdf-processor';
@@ -59,36 +60,17 @@ router.post('/presigned-url', async (req: AuthenticatedRequest, res, next) => {
   }
 });
 
-// Minimal upload insert route
+// Minimal upload insert route - DISABLED (hard-locked to prevent bogus keys)
 router.post('/pdf', authenticateToken, async (req: AuthenticatedRequest, res, next) => {
-  try {
-    const userId = req.user?.userId;
-    if (!userId) {
-      return next(createError('User not authenticated', 401));
-    }
-
-    const { filename, s3_key = null, insurer = null } = req.body;
-
-    if (!filename) {
-      return res.status(400).json({ ok: false, error: 'filename is required' });
-    }
-
-    const q = `
-      INSERT INTO pdf_uploads (filename, original_name, s3_key, s3_url, file_size, mime_type, status, uploaded_by)
-      VALUES ($1, $1, $2, $3, 0, 'application/pdf', 'UPLOADED', $4)
-      RETURNING id::text AS id, filename, status, s3_key, created_at;
-    `;
-
-    const s3_url = s3_key ? `https://bucket.s3.amazonaws.com/${s3_key}` : null;
-    const { rows } = await pool.query(q, [filename, s3_key, s3_url, userId]);
-    return res.json({ ok: true, data: rows[0] });
-  } catch (err) {
-    console.error('upload insert failed:', err);
-    return res.status(500).json({ ok: false, error: 'UPLOAD_INSERT_FAILED' });
-  }
+  // DISABLED: This route was creating rows without files (file_size="0")
+  // Use /pdf/file route instead which requires actual file upload
+  return res.status(400).json({ 
+    ok: false, 
+    error: 'This route is disabled. Use /pdf/file with actual file upload instead.' 
+  });
 });
 
-// Upload PDF (file upload)
+// Upload PDF (file upload) - HARD-LOCKED
 router.post('/pdf/file', upload.single('pdf'), async (req: AuthenticatedRequest, res, next) => {
   try {
     const userId = req.user?.userId;
@@ -96,11 +78,13 @@ router.post('/pdf/file', upload.single('pdf'), async (req: AuthenticatedRequest,
       return next(createError('User not authenticated', 401));
     }
 
-    const file = req.file;
-    if (!file) {
-      return next(createError('PDF file is required', 400));
+    // HARD-LOCK: refuse creating DB rows unless S3 PUT succeeded
+    if (!req.file || !req.file.buffer || req.file.size === 0) {
+      // one-liner: do not let "metadata-only" uploads through
+      return res.status(400).json({ ok: false, error: "No file uploaded (buffer empty)" });
     }
 
+    const file = req.file;
     const { insurer } = req.body;
     if (!insurer || !['TATA_AIG', 'DIGIT'].includes(insurer)) {
       return next(createError('Valid insurer is required (TATA_AIG or DIGIT)', 400));
@@ -125,22 +109,18 @@ router.post('/pdf/file', upload.single('pdf'), async (req: AuthenticatedRequest,
       return next(createError('File size must be less than 10MB', 400));
     }
 
-    const timestamp = Date.now();
-    const safeName = file.originalname.replace(/[^\w.\-]+/g, '_');
-    const s3Key = `uploads/${userId}/${timestamp}_${safeName}`;
+    const safeName = file.originalname.replace(/[^\w.\- ]+/g, "");
+    const plannedKey = `uploads/${userId}/${Date.now()}_${safeName}`;
 
-    // Upload to S3
-    try {
-      await putPdf(s3Key, file.buffer);
-    } catch (e: any) {
-      const code = e?.$metadata?.httpStatusCode;
-      const name = e?.name || 'Error';
-      const msg = e?.message || String(e);
-      console.error('S3 put failed:', { code, name, msg, bucket: S3_BUCKET, key: s3Key });
-      return next(createError('Failed to upload file to S3', 500));
-    }
+    // 1) PUT to S3 - must succeed or throw
+    const put = await putPdfToS3(plannedKey, file.buffer);
+    console.log("[UPLOAD] plannedKey=%s returnedKey=%s bytes=%d",
+      plannedKey, put.key, file.size);
 
-    // Store in database
+    // 2) HEAD to guarantee existence BEFORE DB insert
+    // (putPdfToS3 already does HeadObject; keeping it that way)
+
+    // 2) SAVE EXACTLY the key we PUT (no recompute)
     const uploadResult = await pool.query(
       `INSERT INTO pdf_uploads (
         filename, original_name, s3_key, s3_url, file_size, mime_type, status, uploaded_by, extracted_data
@@ -148,9 +128,9 @@ router.post('/pdf/file', upload.single('pdf'), async (req: AuthenticatedRequest,
       [
         file.originalname,
         file.originalname,
-        s3Key,
-        `https://${S3_BUCKET}.s3.amazonaws.com/${s3Key}`,
-        file.size,
+        put.key, // SAVE EXACTLY the key we PUT
+        `https://${S3_BUCKET}.s3.amazonaws.com/${put.key}`,
+        file.size, // not "0"
         file.mimetype,
         'UPLOADED',
         userId,
@@ -164,12 +144,17 @@ router.post('/pdf/file', upload.single('pdf'), async (req: AuthenticatedRequest,
     );
 
     const pdfUpload = uploadResult.rows[0];
+    console.log("[UPLOAD] storedKey=%s uploadId=%s", pdfUpload.s3_key, pdfUpload.id);
 
-    // For now, keep status as UPLOADED to satisfy DB constraint
-    await pool.query(
-      `UPDATE pdf_uploads SET status = $1 WHERE id = $2`,
-      ['UPLOADED', pdfUpload.id]
-    );
+    // Assert invariants
+    if (!pdfUpload.s3_key.includes(`/${userId}/`) || pdfUpload.file_size === 0) {
+      console.error("[UPLOAD] INVARIANT FAILED", { 
+        storedKey: pdfUpload.s3_key, 
+        userId, 
+        fileSize: pdfUpload.file_size 
+      });
+      return res.status(500).json({ ok: false, error: "Upload invariant failed" });
+    }
 
     // Fire-and-forget background processor; do not await
     setImmediate(() => {
@@ -189,7 +174,7 @@ router.post('/pdf/file', upload.single('pdf'), async (req: AuthenticatedRequest,
       message: 'PDF uploaded successfully. Processing started.',
       data: {
         uploadId: pdfUpload.id,
-        s3Key: s3Key,
+        s3Key: put.key, // Return the exact S3 key that was used
         status: 'UPLOADED'
       }
     } as ApiResponse<any>);

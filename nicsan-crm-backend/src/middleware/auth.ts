@@ -12,12 +12,17 @@ export const authenticateToken = (
   res: Response,
   next: NextFunction
 ) => {
-  const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.split(' ')[1]; // Bearer TOKEN
+  if (req.method === 'OPTIONS') return next();
 
-  if (!token) {
-    return next(createError('Access token required', 401));
-  }
+  // TEMP DEBUG: see what the server actually receives
+  console.log('[AUTH]', req.method, req.originalUrl, 'auth=', req.headers.authorization || '<none>');
+
+  const hdr = req.headers.authorization;
+  if (!hdr) return next(createError('Access token required', 401));
+
+  const m = /^Bearer\s+(.+)$/.exec(hdr);
+  if (!m) return next(createError('Invalid authorization header', 401));
+  const token = m[1];
 
   try {
     const secret = process.env.JWT_SECRET;

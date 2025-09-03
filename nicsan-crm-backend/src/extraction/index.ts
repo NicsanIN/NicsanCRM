@@ -1,26 +1,48 @@
-import { PolicyExtractV1 } from "./schema";
+import { getPdfTextFast } from '../services/pdfTextExtractor';
+import { ocrPdfFromS3ToText } from '../services/ocrTextract';
+import { extractWithOpenAI } from '../services/openaiExtract';
 
-// Minimal stub to unblock the pipeline.
-// Replace with real OpenAI+regex implementation later.
-export async function extractFromPdf(args: { s3Key: string; insurerHint?: string | null }) {
-  const today = new Date();
-  const yyyy = today.getFullYear();
-  const mm = String(today.getMonth() + 1).padStart(2, "0");
-  const dd = String(today.getDate()).padStart(2, "0");
+const TEXT_SOURCE = (process.env.EXTRACT_TEXT_SOURCE ?? 'fast') as 'fast'|'ocr'|'auto';
+const THIN_TEXT_THRESHOLD = Number(process.env.THIN_TEXT_THRESHOLD ?? 500);
 
-  const payload: PolicyExtractV1 = {
-    schema_version: "1.0",
-    insurer: { value: (args.insurerHint as any) ?? "TATA_AIG", confidence: 0.6, source: "llm" },
-    policy_number: { value: "MOCK123456", confidence: 0.5, source: "llm" },
-    vehicle_number: { value: "KA01AB1234", confidence: 0.5, source: "llm" },
-    issue_date: { value: `${yyyy}-${mm}-${dd}`, confidence: 0.5, source: "llm" },
-    expiry_date: { value: `${yyyy + 1}-${mm}-${dd}`, confidence: 0.5, source: "llm" },
-    total_premium: { value: 12345, confidence: 0.4, source: "llm" },
-    idv: { value: 350000, confidence: 0.4, source: "llm" },
-    __debug__: { evidence_snippet: `stub for ${args.s3Key}` },
+async function getPdfTextSelected(s3Key: string): Promise<{ text: string; via: 'fast'|'ocr' }> {
+  if (TEXT_SOURCE === 'ocr') {
+    const text = await ocrPdfFromS3ToText(s3Key);
+    return { text, via: 'ocr' };
+  }
+  if (TEXT_SOURCE === 'fast') {
+    const text = await getPdfTextFast(s3Key);
+    return { text, via: 'fast' };
+  }
+  // auto
+  const fast = await getPdfTextFast(s3Key);
+  if (!fast || fast.length < THIN_TEXT_THRESHOLD) {
+    const ocr = await ocrPdfFromS3ToText(s3Key);
+    return (ocr?.length ?? 0) > (fast?.length ?? 0) ? { text: ocr, via: 'ocr' } : { text: fast, via: 'fast' };
+  }
+  return { text: fast, via: 'fast' };
+}
+
+export async function extractFromPdf(upload: { s3_key: string }, modelTag: 'primary' | 'secondary') {
+  // text timing
+  const tText0 = Date.now();
+  const { text: pdfText, via } = await getPdfTextSelected(upload.s3_key);
+  const text_ms = Date.now() - tText0;
+
+  // llm timing
+  const tLlm0 = Date.now();
+  const data = await extractWithOpenAI({ pdfText, modelTag });
+  const llm_ms = Date.now() - tLlm0;
+
+  const meta = {
+    via,                         // 'fast' | 'ocr'
+    modelTag,                    // 'primary' | 'secondary'
+    pdfTextChars: pdfText?.length ?? 0,
+    text_ms,                    // time to get text (fast or ocr)
+    llm_ms,                     // time to run OpenAI
+    total_ms: text_ms + llm_ms, // end-to-end
   };
-
-  return payload;
+  return { data, meta };
 }
 
 
